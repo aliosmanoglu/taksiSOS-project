@@ -52,6 +52,16 @@ io.on('connection', (socket) => {
         users.push(user);
     });
 
+    socket.on('live_location', (data) => {
+        
+        socket.broadcast.emit('location_update', {
+            id: socket.id,
+            lat: data.lat,
+            lon: data.lon
+        });
+        
+    });
+
     socket.on('sos_trigger', () => {
 
         let user = users.find(u => u.id === socket.id);

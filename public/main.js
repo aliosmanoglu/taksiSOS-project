@@ -7,6 +7,29 @@ const btnSOS = document.getElementById('btn-sos');         // Düzeldi
 const loginPanel = document.getElementById('login-panel'); // Düzeldi
 const sosPanel = document.getElementById('sos-panel');     // Düzeldi
 const logDiv = document.getElementById('logs');            // Düzeldi
+const mapDiv = document.getElementById('map');
+
+let myMap = null;   // Harita objesi
+let marker = null;  // Kırmızı iğne
+
+function haritayiBaslat(lat, lon) {
+    // Harita kutusunu görünür yap
+    mapDiv.style.display = 'block';
+
+    // Eğer harita daha önce başlatılmamışsa başlat
+    if (!myMap) {
+        myMap = L.map('map').setView([lat, lon], 15); // 15 = Zoom seviyesi
+
+        // Harita resimlerini (tiles) OpenStreetMap'ten çek
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(myMap);
+
+        // İğneyi ekle
+        marker = L.marker([lat, lon]).addTo(myMap);
+        marker.bindPopup("Mağdur Burada!").openPopup();
+    } 
+}
 
 // Yardımcı Fonksiyon: Ekrana yazı basma
 function ekranaYaz(mesaj, tip = 'normal') {
@@ -66,4 +89,21 @@ SocketServisi.alarmDinle((veri) => {
 
     // Titreşim
     if(navigator.vibrate) navigator.vibrate([500, 200, 500]);
+            haritayiBaslat(veri.lat, veri.lon); 
+
+});
+
+
+SocketServisi.konumDinle((veri) => {
+    
+    if (marker && myMap) {
+        // İğnenin yerini değiştir
+        const yeniKonum = [veri.lat, veri.lon];
+        marker.setLatLng(yeniKonum);
+        
+        // Haritayı da iğneye odakla (Pan yap)
+        myMap.panTo(yeniKonum);
+        
+        console.log("Harita güncellendi:", yeniKonum);
+    }
 });
