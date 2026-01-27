@@ -29,7 +29,7 @@ const calculateKilometers = (lat1, lon1, lat2, lon2) => {
         Math.sin(dLat/2) * Math.sin(dLat/2) +
         Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c; // Sonuç km döner
+    return R * c; 
 }
 
 
@@ -52,14 +52,40 @@ io.on('connection', (socket) => {
         users.push(user);
     });
 
+    socket.on("location_update", (data) => {
+        let user = users.find(u => u.id === data.id);
+
+        if(user) {
+            user.lat = data.lat;
+            user.lon = data.lon;
+        }
+    });
+
     socket.on('live_location', (data) => {
         
+        users.forEach(u => {
+            if(u.id != data.id) {
+              
+
+                let km = calculateKilometers(data.lat, data.lon, u.lat, u.lon); 
+
+                if(km <= 5) {
+                    io.to(u.id).emit('location_update', {
+                        id: data.id,
+                        lat: data.lat,
+                        lon: data.lon
+                    });
+                }
+            }
+        });
+
+
         socket.broadcast.emit('location_update', {
             id: socket.id,
             lat: data.lat,
             lon: data.lon
         });
-        
+
     });
 
     socket.on('sos_trigger', () => {
@@ -71,21 +97,36 @@ io.on('connection', (socket) => {
         let lat = user.lat;
         let lon = user.lon;
 
+        const roomName = "sos_room_" + socket.id;
+        socket.join(roomName);
+        
+        
         users.forEach(u => {
-            let km = calculateKilometers(lat, lon, u.lat, u.lon);
 
+            let km = calculateKilometers(lat, lon, u.lat, u.lon);
             if(km <= 5 && u.id !== socket.id){
                 io.to(u.id).emit('sos_alert', {
                     from: users.find(us => us.id === socket.id).name,
                     lat: lat,
                     lon: lon,
-                    distance: km
+                    distance: km,
+                    roomName,
                 });
             }
 
         })
+
+        
     });
 
+
+    socket.on('join_sos_room', (room) => {
+            socket.join(room);
+        });
+
+        socket.on('voice_message', (data) => {
+            socket.to(data.room).emit('play_voice', data.audio);
+        });
     socket.on('disconnect', () => {
         console.log('user disconnected: ' + socket.id);
         users = users.filter(u => u.id !== socket.id);
