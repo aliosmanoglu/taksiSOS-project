@@ -5,19 +5,11 @@ let mediaRecorder;
 let audioChunks = [];
 
 
+
 export const SocketServisi = {
 
     girisYap: (data) => {
         socket.emit("connect_sos", data);
-
-        setInterval(() => {   
-            socket.emit("live_location", {
-                id : socket.id,
-                lat: data.lat,
-                lon: data.lon
-            });
-
-         }, 5000);
     },
 
     sosGonder: () => {
@@ -29,19 +21,27 @@ export const SocketServisi = {
         let takipInterval = null;
 
         if(takipInterval) clearInterval(takipInterval);
-
-        let lat = 41.0082;
-        let lon = 28.9784;
         
-        takipInterval = setInterval(() => {
-            lat += 0.05;
-            lon += 0.05;   
+        
 
-            socket.emit("live_location", {
-                id : socket.id,
-                lat: lat,
-                lon: lon
-            }); 
+        takipInterval = setInterval(() => {
+            
+            if(navigator.geolocation){
+                navigator.geolocation.getCurrentPosition((position) => {
+                    let lat = position.coords.latitude;
+                    let lon = position.coords.longitude; 
+                    socket.emit("live_location", {
+                        id : socket.id,
+                        lat: lat,
+                        lon: lon
+                    });     
+                    
+                    console.log("KONUM : ",lat,lon);
+                    
+                })
+            }
+
+            
         }, 1000);
     },
 
