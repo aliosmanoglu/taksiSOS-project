@@ -5,11 +5,15 @@ const app = express();
 const http = require('http');
 const {Server} = require('socket.io');
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 5000;
 
 
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: {
+        origin: "*"
+    }
+});
 
 server.listen(port, () => {
     console.log(`listening on *:${port}`);
@@ -46,10 +50,14 @@ io.on('connection', (socket) => {
         let user = {
             id: socket.id,
             name : data.name,
+            plate : data.plate || '',
+            phone : data.phone || '',
             lat : data.lat,
-            lon : data.lon
+            lon : data.lon,
+            activeRoom: null
         }
         users.push(user);
+        io.emit('all_users_update', users);
     });
 
     socket.on("location_update", (data) => {
@@ -58,10 +66,17 @@ io.on('connection', (socket) => {
         if(user) {
             user.lat = data.lat;
             user.lon = data.lon;
+            io.emit('all_users_update', users);
         }
     });
 
     socket.on('live_location', (data) => {
+        let user = users.find(u => u.id === data.id);
+        if(user) {
+            user.lat = data.lat;
+            user.lon = data.lon;
+            io.emit('all_users_update', users);
+        }
         
         users.forEach(u => {
             if(u.id != data.id) {
@@ -98,7 +113,9 @@ io.on('connection', (socket) => {
         let lon = user.lon;
 
         const roomName = "sos_room_" + socket.id;
+        user.activeRoom = roomName;
         socket.join(roomName);
+        io.emit('all_users_update', users);
         
         
         users.forEach(u => {
@@ -120,16 +137,72 @@ io.on('connection', (socket) => {
     });
 
 
+    socket.on('end_sos', (roomName) => {
+        io.emit('sos_ended', { room: roomName });
+        
+        users.forEach(u => {
+            if(u.activeRoom === roomName) {
+                u.activeRoom = null;
+            }
+        });
+        
+        io.in(roomName).socketsLeave(roomName);
+        io.emit('all_users_update', users);
+    });
+
     socket.on('join_sos_room', (room) => {
-            socket.join(room);
+        socket.join(room);
+        let user = users.find(u => u.id === socket.id);
+        if(user) {
+            user.activeRoom = room;
+            io.emit('all_users_update', users);
+        }
+    });
+
+    socket.on('leave_sos_room', (room) => {
+        socket.leave(room);
+        let user = users.find(u => u.id === socket.id);
+        if(user && user.activeRoom === room) {
+            user.activeRoom = null;
+            io.emit('all_users_update', users);
+        }
+    });
+
+    socket.on('voice_message', (data) => {
+            let sender = users.find(u => u.id === socket.id);
+            let senderName = sender ? sender.name : "Bir Kullanıcı";
+            let msgId = Date.now().toString();
+
+            socket.to(data.room).emit('play_voice', { audio: data.audio, senderName: senderName, id: msgId });
+            
+            io.in(data.room).emit('chat_message', {
+                id: msgId,
+                type: 'audio',
+                content: data.audio,
+                senderName: senderName,
+                senderId: socket.id,
+                timestamp: Date.now(),
+                duration: data.duration
+            });
         });
 
-        socket.on('voice_message', (data) => {
-            socket.to(data.room).emit('play_voice', data.audio);
+        socket.on('text_message', (data) => {
+            let sender = users.find(u => u.id === socket.id);
+            let senderName = sender ? sender.name : "Bir Kullanıcı";
+            
+            io.in(data.room).emit('chat_message', {
+                id: Date.now().toString() + Math.random().toString(),
+                type: 'text',
+                content: data.text,
+                senderName: senderName,
+                senderId: socket.id,
+                timestamp: Date.now()
+            });
         });
     socket.on('disconnect', () => {
         console.log('user disconnected: ' + socket.id);
         users = users.filter(u => u.id !== socket.id);
+        io.emit('all_users_update', users);
     });
 
 } );

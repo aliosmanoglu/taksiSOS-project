@@ -11,7 +11,7 @@ const mapDiv = document.getElementById('map');
 const btnPTT = document.getElementById('btn-ptt');
 
 let myMap = null;   // Harita objesi
-let marker = null;  // Kırmızı iğne
+let markerSource = null;  // OpenLayers Vektör Kaynağı
 
 function haritayiBaslat(lat, lon) {
     // Harita kutusunu görünür yap
@@ -19,18 +19,43 @@ function haritayiBaslat(lat, lon) {
 
     // Eğer harita daha önce başlatılmamışsa başlat
     if (!myMap) {
-        myMap = L.map('map').setView([lat, lon], 15); // 15 = Zoom seviyesi
+        markerSource = new ol.source.Vector();
+        const markerLayer = new ol.layer.Vector({
+            source: markerSource
+        });
 
-        // Harita resimlerini (tiles) OpenStreetMap'ten çek
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors'
-        }).addTo(myMap);
+        myMap = new ol.Map({
+            target: 'map',
+            layers: [
+                new ol.layer.Tile({ source: new ol.source.OSM() }),
+                markerLayer
+            ],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([lon, lat]),
+                zoom: 15
+            })
+        });
 
         // İğneyi ekle
-        marker = L.marker([lat, lon]).addTo(myMap);
-        marker.bindPopup("Mağdur Burada!").openPopup();
+        const feature = new ol.Feature({ geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat])) });
+        feature.setStyle(new ol.style.Style({
+            image: new ol.style.Circle({
+                radius: 8,
+                fill: new ol.style.Fill({color: 'red'}),
+                stroke: new ol.style.Stroke({color: 'white', width: 2})
+            })
+        }));
+        markerSource.addFeature(feature);
     } 
+
+    // OpenLayers haritası görünmezden görünüre (display:block) geçerken boyut günceller
+    setTimeout(() => {
+        if (myMap) {
+            myMap.updateSize();
+        }
+    }, 100);
 }
+
 
 // Yardımcı Fonksiyon: Ekrana yazı basma
 function ekranaYaz(mesaj, tip = 'normal') {
@@ -65,6 +90,9 @@ if (btnConnect) {
         sosPanel.style.display = 'block';
         
         ekranaYaz(`✅ ${veri.name} olarak bağlanıldı.`);
+        
+        // BAĞLANIR BAĞLANMAZ HARİTAYI GÖSTER (İptal edildi, sadece SOS durumunda açılacak)
+        // haritayiBaslat(veri.lat, veri.lon);
     });
 }
 
@@ -82,8 +110,44 @@ if (btnSOS) {
         
         // 3. Telsiz Panelini Aç (Mağdur için hemen görünür)
         document.getElementById('voice-panel').style.display = 'block';
+        
+        // 4. Haritayı başlat
+        const latInput = document.getElementById('lat');
+        const lonInput = document.getElementById('lon');
+        haritayiBaslat(parseFloat(latInput.value), parseFloat(lonInput.value));
+        
+        // 5. SOS Bitir butonunu göster (Kuran kişi kendisi)
+        const btnEndSos = document.getElementById('btn-end-sos');
+        if (btnEndSos) {
+            btnEndSos.style.display = 'inline-block';
+        }
     });
 }
+
+// SOS Bitir Butonuna Tıklanma Olayı
+const btnEndSos = document.getElementById('btn-end-sos');
+if (btnEndSos) {
+    btnEndSos.addEventListener('click', () => {
+        SocketServisi.sosBitir();
+    });
+}
+
+SocketServisi.sosBittiDinle((data) => {
+    // Oda kapandığında:
+    document.getElementById('voice-panel').style.display = 'none';
+    mapDiv.style.display = 'none';
+    if(btnEndSos) btnEndSos.style.display = 'none';
+    
+    // SOS Butonunu eski haline getir
+    if(btnSOS) {
+        btnSOS.innerText = "S O S";
+        btnSOS.disabled = false;
+        // Opsiyonel olarak CSS sınıfını eski hale getirebiliriz
+    }
+    
+    alert("ℹ️ SOS Çağrısı Sonlandırıldı.");
+    ekranaYaz("ℹ️ SOS Çağrısı Sonlandırıldı.");
+});
 
 // --- 3. DİNLEME (ALARM GELDİĞİNDE) ---
 SocketServisi.alarmDinle((veri) => {
@@ -114,16 +178,49 @@ SocketServisi.alarmDinle((veri) => {
 
 
 SocketServisi.konumDinle((veri) => {
-    
-    if (marker && myMap) {
-        // İğnenin yerini değiştir
-        const yeniKonum = [veri.lat, veri.lon];
-        marker.setLatLng(yeniKonum);
+    // Sadece merkez pan yapma iptal edilmişti, artık genel çizimi 'tumKullanicilariDinle' ile yapacağız
+});
+
+SocketServisi.tumKullanicilariDinle((users) => {
+    // Aktif SOS odasında kim varsa haritada göster
+    if (markerSource && myMap) {
+        // İstemcinin ID'sini socket nesnesinden almamız lazım ama main.js'de doğrudan socket yok.
+        // O yüzden tüm markerları temizleyelim ve odada olanları çizelim.
+        markerSource.clear();
         
-        // Haritayı da iğneye odakla (Pan yap)
-        myMap.panTo(yeniKonum);
+        const aktifOda = SocketServisi.getAktifOda();
         
-        console.log("Harita güncellendi:", yeniKonum);
+        // Sadece bulunduğumuz odadaki kişileri (veya kendi odamızı kurduysak) çiz
+        users.forEach(u => {
+            if(u.activeRoom) {
+                const isCreator = aktifOda === "sos_room_" + u.id;
+                
+                const feature = new ol.Feature({
+                    geometry: new ol.geom.Point(ol.proj.fromLonLat([u.lon, u.lat]))
+                });
+                
+                if (isCreator) {
+                    feature.setStyle(new ol.style.Style({
+                        text: new ol.style.Text({
+                            text: '🚗\nSOS',
+                            fill: new ol.style.Fill({color: 'white'}),
+                            font: 'bold 12px sans-serif',
+                            backgroundFill: new ol.style.Fill({color: '#ff3b30'}),
+                            backgroundStroke: new ol.style.Stroke({color: 'white', width: 2}),
+                            padding: [5, 5, 5, 5]
+                        })
+                    }));
+                } else {
+                    feature.setStyle(new ol.style.Style({
+                        text: new ol.style.Text({
+                            text: '🚕',
+                            font: '24px sans-serif'
+                        })
+                    }));
+                }
+                markerSource.addFeature(feature);
+            }
+        });
     }
 });
 
