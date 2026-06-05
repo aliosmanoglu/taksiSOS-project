@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox } from 'react-native';
+import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image } from 'react-native';
 
 // --- Hata ve Uyarı Gizleme ---
 LogBox.ignoreLogs([
   '[expo-av]', // expo-av deprecation uyarısını gizle
+  'Unable to activate keep awake', // Android'de gereksiz keep-awake hatasını gizle
 ]);
 
 import MapView, { Marker } from 'react-native-maps';
@@ -13,6 +14,7 @@ import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system/legacy';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as SplashScreen from 'expo-splash-screen';
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 // Expo Go'da push notification desteklenmediği için çıkan kırmızı ekran hatasını gizler.
@@ -59,12 +61,45 @@ type ChatMessage = {
 const SERVER_URL = 'http://192.168.1.13:5000';
 
 export default function App() {
+  const splashLogoTranslateY = useRef(new Animated.Value(Dimensions.get('window').height / 4)).current;
+  const splashLogoScale = useRef(new Animated.Value(2)).current;
+  const splashFormOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    // Uygulama açılış animasyonu: Kendi özel splash ekranımız
+    SplashScreen.preventAutoHideAsync().catch(() => {});
+    
+    setTimeout(() => {
+      // Orijinal splash'i gizle ve pürüzsüz animasyonu başlat
+      SplashScreen.hideAsync().catch(() => {});
+      
+      Animated.parallel([
+        Animated.timing(splashLogoTranslateY, {
+          toValue: 0,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(splashLogoScale, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(splashFormOpacity, {
+          toValue: 1,
+          duration: 600,
+          delay: 400,
+          useNativeDriver: true,
+        })
+      ]).start();
+    }, 1500); // Siyah ekranda logoyu 1.5 saniye tut
+  }, []);
+
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [name, setName] = useState("");
   const [plate, setPlate] = useState("");
   const [phone, setPhone] = useState("");
-  const [serverIp, setServerIp] = useState("https://wicked-needles-listen.loca.lt"); 
+  const [serverIp, setServerIp] = useState("https://wicked-needles-listen.loca.lt");
 
   const [mapRegion, setMapRegion] = useState({
     latitude: 41.0082,
@@ -76,15 +111,16 @@ export default function App() {
   // State Management for UI
   const [pageMode, setPageMode] = useState<'home' | 'room'>('home');
   const [sosNotifications, setSosNotifications] = useState<SosNotification[]>([]);
-  
+
   const [sosActive, setSosActive] = useState(false); // Ben SOS verdim mi?
   const [activeSOSRoom, setActiveSOSRoom] = useState<string | null>(null); // Hangi odadayım?
   const [roomUsers, setRoomUsers] = useState<any[]>([]); // Haritada göstermek için diğer kişilerin konumu.
+  const [followMode, setFollowMode] = useState<'none' | 'me' | 'sos'>('none'); // Harita kimi takip edecek?
 
   const [logs, setLogs] = useState<{ id: string, msg: string }[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [incomingSpeaker, setIncomingSpeaker] = useState<string | null>(null);
-  
+
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const recordingRef = useRef<Audio.Recording | null>(null);
   const mapRef = useRef<MapView | null>(null);
@@ -110,45 +146,47 @@ export default function App() {
   const renderWaveform = (msgId: string, progress: number = 0) => {
     const bars = [];
     const totalBars = 20;
-    for(let i=0; i<totalBars; i++) {
-        const isPlayed = (i / totalBars) <= progress;
-        bars.push(<View key={i} style={{ width: 3, height: 24, backgroundColor: isPlayed ? '#ff3b30' : 'rgba(255,255,255,0.2)', marginHorizontal: 1, borderRadius: 2 }} />);
+    for (let i = 0; i < totalBars; i++) {
+      const isPlayed = (i / totalBars) <= progress;
+      bars.push(<View key={i} style={{ width: 3, height: 24, backgroundColor: isPlayed ? '#ff3b30' : 'rgba(255,255,255,0.2)', marginHorizontal: 1, borderRadius: 2 }} />);
     }
     return <View style={{ flexDirection: 'row', alignItems: 'center' }}>{bars}</View>;
   };
 
   const focusOnSOS = () => {
+    setFollowMode('sos');
     if (!mapRef.current || !activeSOSRoom) return;
 
     if (socket && activeSOSRoom === "sos_room_" + socket.id) {
-       mapRef.current.animateToRegion({
-         latitude: mapRegion.latitude,
-         longitude: mapRegion.longitude,
-         latitudeDelta: 0.01,
-         longitudeDelta: 0.01
-       }, 1000);
-       return;
+      mapRef.current.animateToRegion({
+        latitude: mapRegion.latitude,
+        longitude: mapRegion.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01
+      }, 1000);
+      return;
     }
 
     const creatorUser = roomUsers.find(u => "sos_room_" + u.id === activeSOSRoom);
     if (creatorUser) {
-       mapRef.current.animateToRegion({
-         latitude: creatorUser.lat,
-         longitude: creatorUser.lon,
-         latitudeDelta: 0.01,
-         longitudeDelta: 0.01
-       }, 1000);
-     } else if (sosNotifications.length > 0) {
-       mapRef.current.animateToRegion({
-         latitude: sosNotifications[0].lat,
-         longitude: sosNotifications[0].lon,
-         latitudeDelta: 0.01,
-         longitudeDelta: 0.01
-       }, 1000);
+      mapRef.current.animateToRegion({
+        latitude: creatorUser.lat,
+        longitude: creatorUser.lon,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01
+      }, 1000);
+    } else if (sosNotifications.length > 0) {
+      mapRef.current.animateToRegion({
+        latitude: sosNotifications[0].lat,
+        longitude: sosNotifications[0].lon,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01
+      }, 1000);
     }
   };
 
   const focusOnMe = () => {
+    setFollowMode('me');
     if (!mapRef.current) return;
     mapRef.current.animateToRegion({
       latitude: mapRegion.latitude,
@@ -158,66 +196,100 @@ export default function App() {
     }, 1000);
   };
 
-  const stopHistoryAudio = async () => {
-      if (historySoundRef.current) {
-          await historySoundRef.current.stopAsync();
-          await historySoundRef.current.unloadAsync();
-          historySoundRef.current = null;
+  // --- HARİTA TAKİP SİSTEMİ (FOLLOW MODE) ---
+  useEffect(() => {
+    if (!mapRef.current || followMode === 'none') return;
+
+    if (followMode === 'me') {
+      mapRef.current.animateToRegion({
+        latitude: mapRegion.latitude,
+        longitude: mapRegion.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01
+      }, 500);
+    } else if (followMode === 'sos' && activeSOSRoom) {
+      if (socket && activeSOSRoom === "sos_room_" + socket.id) {
+        mapRef.current.animateToRegion({
+          latitude: mapRegion.latitude,
+          longitude: mapRegion.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01
+        }, 500);
+      } else {
+        const creatorUser = roomUsers.find(u => "sos_room_" + u.id === activeSOSRoom);
+        if (creatorUser) {
+          mapRef.current.animateToRegion({
+            latitude: creatorUser.lat,
+            longitude: creatorUser.lon,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01
+          }, 500);
+        }
       }
-      setPlayingAudioId(null);
+    }
+  }, [mapRegion.latitude, mapRegion.longitude, roomUsers, followMode, activeSOSRoom]);
+
+
+  const stopHistoryAudio = async () => {
+    if (historySoundRef.current) {
+      await historySoundRef.current.stopAsync();
+      await historySoundRef.current.unloadAsync();
+      historySoundRef.current = null;
+    }
+    setPlayingAudioId(null);
   };
 
   const playHistorySequence = async (startIndex: number) => {
-      if (startIndex >= chatMessages.length) {
-          setPlayingAudioId(null);
-          return;
-      }
-      const msg = chatMessages[startIndex];
-      if (msg.type !== 'audio') {
-          playHistorySequence(startIndex + 1);
-          return;
-      }
+    if (startIndex >= chatMessages.length) {
+      setPlayingAudioId(null);
+      return;
+    }
+    const msg = chatMessages[startIndex];
+    if (msg.type !== 'audio') {
+      playHistorySequence(startIndex + 1);
+      return;
+    }
 
-      await stopHistoryAudio();
-      setPlayingAudioId(msg.id);
-      
-      try {
-          const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
-          const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
-          await FileSystem.writeAsStringAsync(fileUri, pureBase64, { encoding: FileSystem.EncodingType.Base64 });
-          
-          const { sound } = await Audio.Sound.createAsync(
-              { uri: fileUri },
-              { shouldPlay: true }
-          );
-          historySoundRef.current = sound;
-          
-          sound.setOnPlaybackStatusUpdate((status: any) => {
-              if (status.isLoaded) {
-                  const progress = status.durationMillis ? status.positionMillis / status.durationMillis : 0;
-                  setPlaybackProgress(prev => ({ ...prev, [msg.id]: progress }));
-                  if (status.didJustFinish) {
-                      playHistorySequence(startIndex + 1);
-                  }
-              }
-          });
-      } catch (err) {
-          console.log("Geçmiş ses çalınamadı", err);
-          playHistorySequence(startIndex + 1);
-      }
+    await stopHistoryAudio();
+    setPlayingAudioId(msg.id);
+
+    try {
+      const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
+      const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
+      await FileSystem.writeAsStringAsync(fileUri, pureBase64, { encoding: FileSystem.EncodingType.Base64 });
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: fileUri },
+        { shouldPlay: true }
+      );
+      historySoundRef.current = sound;
+
+      sound.setOnPlaybackStatusUpdate((status: any) => {
+        if (status.isLoaded) {
+          const progress = status.durationMillis ? status.positionMillis / status.durationMillis : 0;
+          setPlaybackProgress(prev => ({ ...prev, [msg.id]: progress }));
+          if (status.didJustFinish) {
+            playHistorySequence(startIndex + 1);
+          }
+        }
+      });
+    } catch (err) {
+      console.log("Geçmiş ses çalınamadı", err);
+      playHistorySequence(startIndex + 1);
+    }
   };
 
   const handlePlayPause = (msgId: string) => {
-      if (playingAudioId === msgId) {
-          stopHistoryAudio();
-      } else {
-          // Güncel chatMessages referansı useEffect dışında da geçerlidir fakat closure olabilir.
-          // En garantisi index bulup başlatmak
-          const index = chatMessages.findIndex(m => m.id === msgId);
-          if (index !== -1) {
-              playHistorySequence(index);
-          }
+    if (playingAudioId === msgId) {
+      stopHistoryAudio();
+    } else {
+      // Güncel chatMessages referansı useEffect dışında da geçerlidir fakat closure olabilir.
+      // En garantisi index bulup başlatmak
+      const index = chatMessages.findIndex(m => m.id === msgId);
+      if (index !== -1) {
+        playHistorySequence(index);
       }
+    }
   };
 
   const sendTextMessage = () => {
@@ -259,53 +331,50 @@ export default function App() {
     }
   }, [sosActive]);
 
-  // --- GERÇEK KONUM TAKİBİ ---
+  // --- TEST İÇİN SAHTE KONUM VE HAREKET ---
   useEffect(() => {
-    let locationSubscription: any = null;
+    let testInterval: NodeJS.Timeout | null = null;
 
-    const startWatchingLocation = async () => {
+    const startWatchingLocation = () => {
       if (isConnected && socket) {
-        try {
-          const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') {
-            console.log("Konum takibi izni alınamadı!");
-            return;
-          }
+        // Cihazlar tam üst üste binmesin diye çok ufak rastgele bir sapma ekliyoruz.
+        const offsetLat = (Math.random() - 0.5) * 0.005;
+        const offsetLon = (Math.random() - 0.5) * 0.005;
 
-          locationSubscription = await Location.watchPositionAsync(
-            {
-              accuracy: Location.Accuracy.High,
-              timeInterval: 3000,
-              distanceInterval: 2,
-            },
-            (loc) => {
-              const newLat = loc.coords.latitude;
-              const newLon = loc.coords.longitude;
-              
-              setMapRegion(prev => ({
-                ...prev,
-                latitude: newLat,
-                longitude: newLon,
-              }));
+        // Herkes İstanbul'un merkezinde başlayacak
+        let currentTestLat = 41.0082 + offsetLat;
+        let currentTestLon = 28.9784 + offsetLon;
 
-              socket.emit('live_location', {
-                id: socket.id,
-                lat: newLat,
-                lon: newLon,
-              });
-            }
-          );
-        } catch (err) {
-          console.log("Konum izleme hatası:", err);
-        }
+        // İlk konumu gönder
+        setMapRegion(prev => ({ ...prev, latitude: currentTestLat, longitude: currentTestLon }));
+        socket.emit('live_location', { id: socket.id, lat: currentTestLat, lon: currentTestLon });
+
+        // Her 3 saniyede bir konumu güncelle ve GÖZLE GÖRÜLÜR şekilde hareket ettir
+        testInterval = setInterval(() => {
+          // Gözle görülür bir hareket için sapmayı artırdık (yaklaşık 100 metre)
+          currentTestLat += 0.001; 
+          currentTestLon += 0.001;
+
+          setMapRegion(prev => ({
+            ...prev,
+            latitude: currentTestLat,
+            longitude: currentTestLon,
+          }));
+
+          socket.emit('live_location', {
+            id: socket.id,
+            lat: currentTestLat,
+            lon: currentTestLon,
+          });
+        }, 3000);
       }
     };
 
     startWatchingLocation();
 
     return () => {
-      if (locationSubscription) {
-        locationSubscription.remove();
+      if (testInterval) {
+        clearInterval(testInterval);
       }
     };
   }, [isConnected, socket]);
@@ -317,9 +386,11 @@ export default function App() {
     }
 
     // İzinleri ve konum bilgisini al:
-    let currentLat = 41.0082; // varsayılan fallback
+    let currentLat = 41.0082; // varsayılan fallback (TEST İÇİN SABİT)
     let currentLon = 28.9784;
 
+    /*
+    // --- GERÇEK İZİN VE KONUM ALMA KODU (Yedek) ---
     try {
       // 1. Konum izinlerini iste
       const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
@@ -367,16 +438,31 @@ export default function App() {
     } catch (e) {
       console.log("Konum izin veya veri hatası:", e);
     }
+    // ---------------------------------------------
+    */
+
+    try {
+      // Sadece ses izni istiyoruz, konumu test için sabitledik
+      await Audio.requestPermissionsAsync();
+    } catch (e) {
+      console.log("Ses kayıt izni hatası:", e);
+    }
 
     setMapRegion({
-       ...mapRegion,
-       latitude: currentLat,
-       longitude: currentLon
+      ...mapRegion,
+      latitude: currentLat,
+      longitude: currentLon
     });
 
+    if (socket) {
+      socket.disconnect();
+    }
+
     const newSocket = io(serverIp);
-    
+    let hasConnected = false;
+
     newSocket.on('connect', () => {
+      hasConnected = true;
       setIsConnected(true);
       newSocket.emit('connect_sos', {
         name: name,
@@ -397,7 +483,7 @@ export default function App() {
     });
 
     newSocket.on('all_users_update', (usersData: any[]) => {
-       setRoomUsers(usersData);
+      setRoomUsers(usersData);
     });
 
     newSocket.on('sos_alert', async (data: any) => {
@@ -413,7 +499,7 @@ export default function App() {
         }];
       });
       addLog(`🚨 ACİL DURUM: ${data.from} (${data.distance.toFixed(2)} km)`);
-      
+
       await Notifications.scheduleNotificationAsync({
         content: {
           title: "🚨 ACİL YARDIM ÇAĞRISI!",
@@ -427,73 +513,78 @@ export default function App() {
     });
 
     newSocket.on('connect_error', (error: any) => {
-       console.log("Socket.io Bağlantı Hatası:", error);
-       Alert.alert("Bağlantı Hatası", `Sunucuya bağlanılamadı.`);
+      console.log("Socket.io Bağlantı Hatası:", error);
+
+      // Eğer ilk defa bağlanmaya çalışıp hata aldıysa, döngüyü durdur ve uyarı ver.
+      if (!hasConnected) {
+        Alert.alert("Bağlantı Hatası", `Sunucuya bağlanılamadı. Lütfen IP adresinin doğru olduğundan ve telefonunuzun bilgisayarla aynı Wi-Fi ağına bağlı olduğundan emin olun.`);
+        newSocket.disconnect();
+      }
     });
 
     newSocket.on('play_voice', async (payload: any) => {
-       try {
-         const dataUrl = typeof payload === 'string' ? payload : payload.audio;
-         const speakerName = (typeof payload === 'object' && payload.senderName) ? payload.senderName : "BİRİSİ";
-         
-         setIncomingSpeaker(speakerName);
+      try {
+        const dataUrl = typeof payload === 'string' ? payload : payload.audio;
+        const speakerName = (typeof payload === 'object' && payload.senderName) ? payload.senderName : "BİRİSİ";
 
-         await Audio.setAudioModeAsync({ 
-             allowsRecordingIOS: true, 
-             playsInSilentModeIOS: true,
-             staysActiveInBackground: true,
-             playThroughEarpieceAndroid: false
-         });
-         
-         const base64Data = dataUrl.includes('base64,') ? dataUrl.split('base64,')[1] : dataUrl;
-         const fileUri = FileSystem.documentDirectory + `incoming_voice_${Date.now()}.m4a`;
-         await FileSystem.writeAsStringAsync(fileUri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
-         
-         const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
-         sound.setOnPlaybackStatusUpdate(async (status) => {
-            if (status.isLoaded && status.didJustFinish) {
-               setIncomingSpeaker(null);
-               await sound.unloadAsync();
-               await FileSystem.deleteAsync(fileUri, { idempotent: true });
-            }
-         });
-         await sound.playAsync();
-       } catch (e) {
-         setIncomingSpeaker(null);
-         console.log("Ses çalınamadı:", e);
-       }
+        setIncomingSpeaker(speakerName);
+
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          playThroughEarpieceAndroid: false
+        });
+
+        const base64Data = dataUrl.includes('base64,') ? dataUrl.split('base64,')[1] : dataUrl;
+        const fileUri = FileSystem.documentDirectory + `incoming_voice_${Date.now()}.m4a`;
+        await FileSystem.writeAsStringAsync(fileUri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
+
+        const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
+        sound.setOnPlaybackStatusUpdate(async (status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            setIncomingSpeaker(null);
+            await sound.unloadAsync();
+            await FileSystem.deleteAsync(fileUri, { idempotent: true });
+          }
+        });
+        await sound.playAsync();
+      } catch (e) {
+        setIncomingSpeaker(null);
+        console.log("Ses çalınamadı:", e);
+      }
     });
 
-      newSocket.on('chat_message', async (msg: ChatMessage) => {
-        setChatMessages(prev => [...prev, msg]);
-        if (msg.senderId !== newSocket.id) {
-           await Notifications.scheduleNotificationAsync({
-             content: {
-               title: "💬 Yeni Mesaj",
-               body: `${msg.senderName}: ${msg.type === 'audio' ? '🎤 Sesli Mesaj' : msg.content}`,
-               sound: true,
-               priority: Notifications.AndroidNotificationPriority.HIGH,
-             },
-             trigger: null,
-           });
-        }
-      });
+    newSocket.on('chat_message', async (msg: ChatMessage) => {
+      setChatMessages(prev => [...prev, msg]);
+      if (msg.senderId !== newSocket.id) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: "💬 Yeni Mesaj",
+            body: `${msg.senderName}: ${msg.type === 'audio' ? '🎤 Sesli Mesaj' : msg.content}`,
+            sound: true,
+            priority: Notifications.AndroidNotificationPriority.HIGH,
+          },
+          trigger: null,
+        });
+      }
+    });
 
     newSocket.on('sos_ended', (data: any) => {
       const endedRoom = data?.room;
-      if(endedRoom) {
-         setSosNotifications(prev => prev.filter(n => n.roomName !== endedRoom));
+      if (endedRoom) {
+        setSosNotifications(prev => prev.filter(n => n.roomName !== endedRoom));
       }
       setActiveSOSRoom(prevRoom => {
-         if(prevRoom === endedRoom) {
-             setSosActive(false);
-             setPageMode('home');
-             setChatMessages([]);
-             setShowChat(false);
-             Alert.alert("Bilgi", "SOS Çağrısı sonlandırıldı.");
-             return null;
-         }
-         return prevRoom;
+        if (prevRoom === endedRoom) {
+          setSosActive(false);
+          setPageMode('home');
+          setChatMessages([]);
+          setShowChat(false);
+          Alert.alert("Bilgi", "SOS Çağrısı sonlandırıldı.");
+          return null;
+        }
+        return prevRoom;
       });
     });
 
@@ -524,8 +615,8 @@ export default function App() {
   };
 
   const leaveRoom = () => {
-    if(socket && activeSOSRoom) {
-        socket.emit('leave_sos_room', activeSOSRoom);
+    if (socket && activeSOSRoom) {
+      socket.emit('leave_sos_room', activeSOSRoom);
     }
     setSosActive(false);
     setActiveSOSRoom(null);
@@ -542,10 +633,10 @@ export default function App() {
       if (recordingRef.current) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({ 
-          allowsRecordingIOS: true, 
-          playsInSilentModeIOS: true,
-          playThroughEarpieceAndroid: false 
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        playThroughEarpieceAndroid: false
       });
       const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       recordingRef.current = recording;
@@ -559,22 +650,22 @@ export default function App() {
     try {
       const currentRecording = recordingRef.current;
       if (!currentRecording) return;
-      
+
       setIsRecording(false);
       recordingRef.current = null;
-      
+
       try {
-          const status = await currentRecording.stopAndUnloadAsync();
-          const duration = status.durationMillis;
-          const uri = currentRecording.getURI();
-          
-          if (uri && socket && activeSOSRoom) {
-              const base64String = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-              socket.emit('voice_message', { room: activeSOSRoom, audio: base64String, duration: duration });
-              addLog("🎙️ Ses gönderildi.");
-          }
-      } catch(err) {
-          console.log("Dosya okuma hatası:", err);
+        const status = await currentRecording.stopAndUnloadAsync();
+        const duration = status.durationMillis;
+        const uri = currentRecording.getURI();
+
+        if (uri && socket && activeSOSRoom) {
+          const base64String = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+          socket.emit('voice_message', { room: activeSOSRoom, audio: base64String, duration: duration });
+          addLog("🎙️ Ses gönderildi.");
+        }
+      } catch (err) {
+        console.log("Dosya okuma hatası:", err);
       }
     } catch (err) {
       console.log("Kayıt durdurulamadı", err);
@@ -585,18 +676,35 @@ export default function App() {
 
   if (!isConnected) {
     return (
-      <View style={styles.container}>
-        <View style={styles.loginOverlay}>
-          <View style={styles.loginBox}>
-            <Text style={styles.title}>🚨 Taksi SOS Giriş</Text>
-            <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
-            <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
-            <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
-            <TextInput style={styles.input} value={serverIp} onChangeText={setServerIp} placeholder="Sunucu Adresi (örn: http://172.2.3.114:5000)" placeholderTextColor="#999" />
+      <View style={[styles.container, { backgroundColor: '#000000' }]}>
+        <View style={[styles.loginOverlay, { backgroundColor: '#000000' }]}>
+          <View style={[styles.loginBox, { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0 }]}>
+            <Animated.Image 
+              source={require('../assets/images/logo.png')} 
+              style={{ 
+                width: 120, 
+                height: 120, 
+                alignSelf: 'center', 
+                marginBottom: 15, 
+                borderRadius: 25,
+                transform: [
+                  { translateY: splashLogoTranslateY },
+                  { scale: splashLogoScale }
+                ]
+              }} 
+            />
             
-            <TouchableOpacity style={styles.connectButton} onPress={handleConnect}>
-              <Text style={styles.connectButtonText}>Lokal Sunucuya Bağlan</Text>
-            </TouchableOpacity>
+            <Animated.View style={{ opacity: splashFormOpacity }}>
+              <Text style={styles.title}>Taksi SOS</Text>
+              <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
+              <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
+              <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
+              <TextInput style={styles.input} value={serverIp} onChangeText={setServerIp} placeholder="Sunucu Adresi (örn: http://172.2.3.114:5000)" placeholderTextColor="#999" />
+
+              <TouchableOpacity style={styles.connectButton} onPress={handleConnect}>
+                <Text style={styles.connectButtonText}>Lokal Sunucuya Bağlan</Text>
+              </TouchableOpacity>
+            </Animated.View>
           </View>
         </View>
       </View>
@@ -613,31 +721,32 @@ export default function App() {
           </TouchableOpacity>
           <Text style={styles.roomTitle}>ACİL DURUM ODASI</Text>
           {socket && activeSOSRoom === "sos_room_" + socket.id ? (
-             <TouchableOpacity style={styles.headerButtonRed} onPress={() => {
-                Alert.alert(
-                  "Emin misiniz?",
-                  "SOS çağrısını bitirmek istediğinize emin misiniz? Bu işlem odayı herkes için kapatacaktır.",
-                  [
-                    { text: "İptal", style: "cancel" },
-                    { text: "Evet, Bitir", style: "destructive", onPress: () => socket.emit('end_sos', activeSOSRoom) }
-                  ]
-                );
-             }}>
-               <Text style={styles.headerButtonText}>SOS BİTİR</Text>
-             </TouchableOpacity>
+            <TouchableOpacity style={styles.headerButtonRed} onPress={() => {
+              Alert.alert(
+                "Emin misiniz?",
+                "SOS çağrısını bitirmek istediğinize emin misiniz? Bu işlem odayı herkes için kapatacaktır.",
+                [
+                  { text: "İptal", style: "cancel" },
+                  { text: "Evet, Bitir", style: "destructive", onPress: () => socket.emit('end_sos', activeSOSRoom) }
+                ]
+              );
+            }}>
+              <Text style={styles.headerButtonText}>SOS BİTİR</Text>
+            </TouchableOpacity>
           ) : (
-             <TouchableOpacity style={styles.headerButtonRed} onPress={leaveRoom}>
-               <Text style={styles.headerButtonText}>Çıkış Yap</Text>
-             </TouchableOpacity>
+            <TouchableOpacity style={styles.headerButtonRed} onPress={leaveRoom}>
+              <Text style={styles.headerButtonText}>Çıkış Yap</Text>
+            </TouchableOpacity>
           )}
         </View>
 
         <View style={styles.roomMapBox}>
-          <MapView 
+          <MapView
             ref={mapRef}
             userInterfaceStyle="dark"
             key={`map-room-${activeSOSRoom}`}
-            style={styles.map} 
+            style={styles.map}
+            onPanDrag={() => setFollowMode('none')}
             initialRegion={{
               latitude: sosNotifications.length > 0 ? sosNotifications[0].lat : mapRegion.latitude,
               longitude: sosNotifications.length > 0 ? sosNotifications[0].lon : mapRegion.longitude,
@@ -645,60 +754,60 @@ export default function App() {
               longitudeDelta: 0.02,
             }}
           >
-              {socket && activeSOSRoom === "sos_room_" + socket.id ? (
-                 <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz (SOS)">
+            {socket && activeSOSRoom === "sos_room_" + socket.id ? (
+              <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz (SOS)">
+                <View style={styles.sosMarkerContainer}>
+                  <View style={styles.sosBadge}>
+                    <Text style={styles.sosBadgeText}>SOS</Text>
+                  </View>
+                  <Text style={styles.carIcon}>🚗</Text>
+                </View>
+              </Marker>
+            ) : (
+              <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz">
+                <View style={styles.taxiMarker}>
+                  <Text style={{ fontSize: 26 }}>🚕</Text>
+                </View>
+              </Marker>
+            )}
+            {roomUsers.map(u => {
+              if (socket && u.id === socket.id) return null;
+
+              if (activeSOSRoom && u.activeRoom !== activeSOSRoom) return null;
+
+              const isCreator = activeSOSRoom === "sos_room_" + u.id;
+
+              if (isCreator) {
+                return (
+                  <Marker
+                    key={u.id}
+                    coordinate={{ latitude: u.lat, longitude: u.lon }}
+                    title={u.name + " (SOS)"}
+                  >
                     <View style={styles.sosMarkerContainer}>
-                       <View style={styles.sosBadge}>
-                          <Text style={styles.sosBadgeText}>SOS</Text>
-                       </View>
-                       <Text style={styles.carIcon}>🚗</Text>
+                      <View style={styles.sosBadge}>
+                        <Text style={styles.sosBadgeText}>SOS</Text>
+                      </View>
+                      <Text style={styles.carIcon}>🚗</Text>
                     </View>
-                 </Marker>
-              ) : (
-                 <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz">
-                    <View style={styles.taxiMarker}>
-                       <Text style={{fontSize: 26}}>🚕</Text>
-                    </View>
-                 </Marker>
-              )}
-              {roomUsers.map(u => {
-                  if (socket && u.id === socket.id) return null;
-                  
-                  if (activeSOSRoom && u.activeRoom !== activeSOSRoom) return null;
+                  </Marker>
+                );
+              }
 
-                  const isCreator = activeSOSRoom === "sos_room_" + u.id;
-
-                  if (isCreator) {
-                      return (
-                          <Marker 
-                             key={u.id}
-                             coordinate={{ latitude: u.lat, longitude: u.lon }} 
-                             title={u.name + " (SOS)"} 
-                          >
-                             <View style={styles.sosMarkerContainer}>
-                               <View style={styles.sosBadge}>
-                                  <Text style={styles.sosBadgeText}>SOS</Text>
-                               </View>
-                               <Text style={styles.carIcon}>🚗</Text>
-                             </View>
-                          </Marker>
-                      );
-                  }
-
-                  return (
-                      <Marker 
-                         key={u.id}
-                         coordinate={{ latitude: u.lat, longitude: u.lon }} 
-                         title={u.name} 
-                      >
-                         <View style={styles.taxiMarker}>
-                            <Text style={{fontSize: 26}}>🚕</Text>
-                         </View>
-                      </Marker>
-                  );
-              })}
+              return (
+                <Marker
+                  key={u.id}
+                  coordinate={{ latitude: u.lat, longitude: u.lon }}
+                  title={u.name}
+                >
+                  <View style={styles.taxiMarker}>
+                    <Text style={{ fontSize: 26 }}>🚕</Text>
+                  </View>
+                </Marker>
+              );
+            })}
           </MapView>
-          
+
           <TouchableOpacity style={[styles.focusButton, { bottom: 20, left: 20 }]} onPress={() => setShowChat(true)}>
             <Text style={styles.focusButtonText}>💬 Sohbet</Text>
           </TouchableOpacity>
@@ -712,15 +821,15 @@ export default function App() {
 
         <View style={styles.pttBox}>
           {incomingSpeaker ? (
-            <View style={[styles.pttButton, {backgroundColor: '#28a745'}]}>
-               <Text style={styles.pttButtonText}>🔊 {incomingSpeaker.toUpperCase()} KONUŞUYOR...</Text>
-               <Text style={{color:'rgba(255,255,255,0.9)', fontSize:12, marginTop:5}}>(Konuşmak için basılı tutun)</Text>
+            <View style={[styles.pttButton, { backgroundColor: '#28a745' }]}>
+              <Text style={styles.pttButtonText}>🔊 {incomingSpeaker.toUpperCase()} KONUŞUYOR...</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 12, marginTop: 5 }}>(Konuşmak için basılı tutun)</Text>
             </View>
           ) : (
             <>
               <Text style={styles.pttStatusText}>🔴 Telsiz Bağlantısı Aktif</Text>
-              <TouchableOpacity 
-                style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, isRecording && styles.pttButtonRecording]} 
+              <TouchableOpacity
+                style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, isRecording && styles.pttButtonRecording]}
                 onPressIn={startRecording}
                 onPressOut={stopRecording}
                 activeOpacity={0.9}
@@ -754,15 +863,15 @@ export default function App() {
                         <Text style={styles.chatContent}>{item.content}</Text>
                       ) : (
                         <View style={styles.audioMessageContainer}>
-                           <View style={styles.audioMessageRow}>
-                              <View style={styles.waveformBox}>
-                                 {renderWaveform(item.id, playbackProgress[item.id] || 0)}
-                              </View>
-                              <TouchableOpacity style={[styles.chatPlayIconBtn, { marginLeft: 10, marginRight: 0 }]} onPress={() => handlePlayPause(item.id)}>
-                                <Text style={{fontSize: 24}}>{playingAudioId === item.id ? '⏹️' : '▶️'}</Text>
-                              </TouchableOpacity>
-                           </View>
-                           <Text style={styles.audioDurationText}>{formatDuration(item.duration)}</Text>
+                          <View style={styles.audioMessageRow}>
+                            <View style={styles.waveformBox}>
+                              {renderWaveform(item.id, playbackProgress[item.id] || 0)}
+                            </View>
+                            <TouchableOpacity style={[styles.chatPlayIconBtn, { marginLeft: 10, marginRight: 0 }]} onPress={() => handlePlayPause(item.id)}>
+                              <Text style={{ fontSize: 24 }}>{playingAudioId === item.id ? '⏹️' : '▶️'}</Text>
+                            </TouchableOpacity>
+                          </View>
+                          <Text style={styles.audioDurationText}>{formatDuration(item.duration)}</Text>
                         </View>
                       )}
                     </View>
@@ -790,38 +899,38 @@ export default function App() {
   // Görünüm 1: Ana Ekran (Home)
   return (
     <View style={styles.container}>
-      
+
       {/* Üst Kısım Bilgi Paneli */}
       <View style={{ position: 'absolute', top: 40, left: 20, zIndex: 100 }}>
-          <View style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}>
-             <Text style={{ color: '#4CAF50', fontSize: 14, fontWeight: 'bold' }}>👤 {name}</Text>
-             {plate ? <Text style={{ color: '#fff', fontSize: 11, marginTop: 2 }}>🎫 Plaka: {plate}</Text> : null}
-          </View>
+        <View style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}>
+          <Text style={{ color: '#4CAF50', fontSize: 14, fontWeight: 'bold' }}>👤 {name}</Text>
+          {plate ? <Text style={{ color: '#fff', fontSize: 11, marginTop: 2 }}>🎫 Plaka: {plate}</Text> : null}
+        </View>
       </View>
 
       {/* Bağlantıyı Kes Butonu */}
       <View style={{ position: 'absolute', top: 40, right: 20, zIndex: 100 }}>
-          <TouchableOpacity 
-             style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}
-             onPress={() => {
-                if(socket) socket.disconnect();
-                setIsConnected(false);
-             }}
-          >
-             <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>Çıkış Yap</Text>
-          </TouchableOpacity>
+        <TouchableOpacity
+          style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}
+          onPress={() => {
+            if (socket) socket.disconnect();
+            setIsConnected(false);
+          }}
+        >
+          <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>Çıkış Yap</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Üstteki SOS Alert Banner */}
       {sosNotifications.map((notification, index) => (
         <View key={notification.roomName} style={[styles.topBanner, { top: 100 + (index * 90) }]}>
-            <View style={styles.bannerInfo}>
-               <Text style={styles.bannerTitle}>🚨 ACİL YARDIM ÇAĞRISI!</Text>
-               <Text style={styles.bannerSubtitle}>{notification.from} ({notification.distance.toFixed(2)} km)</Text>
-            </View>
-            <TouchableOpacity style={styles.joinButton} onPress={() => joinSOSRoom(notification.roomName, notification.from)}>
-              <Text style={styles.joinButtonText}>Katıl</Text>
-            </TouchableOpacity>
+          <View style={styles.bannerInfo}>
+            <Text style={styles.bannerTitle}>🚨 ACİL YARDIM ÇAĞRISI!</Text>
+            <Text style={styles.bannerSubtitle}>{notification.from} ({notification.distance.toFixed(2)} km)</Text>
+          </View>
+          <TouchableOpacity style={styles.joinButton} onPress={() => joinSOSRoom(notification.roomName, notification.from)}>
+            <Text style={styles.joinButtonText}>Katıl</Text>
+          </TouchableOpacity>
         </View>
       ))}
 
@@ -851,7 +960,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111', alignItems: 'center' },
   map: { width: '100%', height: '100%' },
-  
+
   // Login Ekranı
   loginOverlay: { flex: 1, width: '100%', backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
   loginBox: { width: '85%', backgroundColor: 'rgba(30,30,30,1)', padding: 25, borderRadius: 15, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 10 },
@@ -869,7 +978,7 @@ const styles = StyleSheet.create({
   joinButtonText: { color: '#ff3b30', fontWeight: 'bold' },
 
   mapCenterBox: { width: '90%', height: 350, marginTop: 140, borderRadius: 20, overflow: 'hidden', borderWidth: 2, borderColor: '#ddd', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 },
-  
+
   homeLogsContainer: { position: 'absolute', top: 120, left: 20, right: 20, zIndex: 10, alignItems: 'center' },
   homeLogCard: { backgroundColor: 'rgba(0,0,0,0.7)', padding: 8, borderRadius: 8, marginBottom: 5 },
   homeLogText: { color: 'white', fontSize: 12 },
@@ -887,7 +996,7 @@ const styles = StyleSheet.create({
   roomTitle: { color: 'white', fontSize: 16, fontWeight: 'bold' },
 
   roomMapBox: { flex: 1, backgroundColor: '#333' },
-  
+
   pttBox: { height: 250, backgroundColor: '#111', borderTopWidth: 2, borderColor: '#222', alignItems: 'center', justifyContent: 'center', padding: 20 },
   pttStatusText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 18, marginBottom: 20 },
   pttButton: { width: '100%', height: 100, backgroundColor: '#333', borderRadius: 50, justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#555' },
