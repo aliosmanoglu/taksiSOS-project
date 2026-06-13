@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image } from 'react-native';
+import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image, ActivityIndicator } from 'react-native';
 
 // --- Hata ve Uyarı Gizleme ---
 LogBox.ignoreLogs([
@@ -15,6 +15,8 @@ import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system/legacy';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 // Expo Go'da push notification desteklenmediği için çıkan kırmızı ekran hatasını gizler.
@@ -58,7 +60,38 @@ type ChatMessage = {
   duration?: number;
 };
 
-const SERVER_URL = 'http://192.168.1.13:5000';
+const SERVER_URL = 'http://172.2.2.172:5000';
+
+async function registerForPushNotificationsAsync() {
+  let token;
+  if (Device.isDevice) {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    if (finalStatus !== 'granted') {
+      console.log('Push bildirimleri için izin verilmedi!');
+      return null;
+    }
+    const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
+    token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+  } else {
+    console.log('Push bildirimleri fiziksel bir cihazda çalışır.');
+  }
+
+  if (Platform.OS === 'android') {
+    Notifications.setNotificationChannelAsync('default', {
+      name: 'default',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#FF231F7C',
+    });
+  }
+
+  return token;
+}
 
 export default function App() {
   const splashLogoTranslateY = useRef(new Animated.Value(Dimensions.get('window').height / 4)).current;
@@ -96,10 +129,12 @@ export default function App() {
 
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [name, setName] = useState("");
   const [plate, setPlate] = useState("");
   const [phone, setPhone] = useState("");
-  const [serverIp, setServerIp] = useState("https://wicked-needles-listen.loca.lt");
+  const [serverIp, setServerIp] = useState("http://172.2.2.172:5000");
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   const [mapRegion, setMapRegion] = useState({
     latitude: 41.0082,
@@ -309,6 +344,7 @@ export default function App() {
           if (data.name) setName(data.name);
           if (data.plate) setPlate(data.plate);
           if (data.phone) setPhone(data.phone);
+          if (data.serverIp) setServerIp(data.serverIp);
         }
       } catch (err) {
         console.log("Kimlik bilgileri yüklenirken hata oluştu:", err);
@@ -384,6 +420,33 @@ export default function App() {
       Alert.alert('Uyarı', 'Lütfen tüm alanları doldurun.');
       return;
     }
+
+    const nameRegex = /^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]{3,}$/;
+    if (!nameRegex.test(name.trim())) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir isim soyisim giriniz (Sadece harfler ve en az 3 karakter).');
+      return;
+    }
+
+    const phoneRegex = /^(05|5)[0-9]{9}$/;
+    if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir telefon numarası giriniz (Örn: 05xx veya 5xx ile başlayan 10-11 haneli numara).');
+      return;
+    }
+
+    const plateClean = plate.replace(/\s/g, '');
+    const plateRegex = /^34T[A-Z0-9]{2,6}$/i;
+    if (!plateRegex.test(plateClean)) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir İstanbul Taksi plakası giriniz (Plaka 34 T ile başlamalıdır).');
+      return;
+    }
+
+    const ipRegex = /^https?:\/\/.+/;
+    if (!ipRegex.test(serverIp.trim())) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir sunucu adresi giriniz (http:// veya https:// ile başlamalı).');
+      return;
+    }
+
+    setIsConnecting(true);
 
     // İzinleri ve konum bilgisini al:
     let currentLat = 41.0082; // varsayılan fallback (TEST İÇİN SABİT)
@@ -461,22 +524,27 @@ export default function App() {
     const newSocket = io(serverIp);
     let hasConnected = false;
 
-    newSocket.on('connect', () => {
+    newSocket.on('connect', async () => {
       hasConnected = true;
       setIsConnected(true);
+      setIsConnecting(false);
+      
+      let pushToken = await registerForPushNotificationsAsync();
+      
       newSocket.emit('connect_sos', {
         name: name,
         plate: plate,
         phone: phone,
         lat: currentLat,
-        lon: currentLon
+        lon: currentLon,
+        pushToken: pushToken
       });
       addLog(`✅ Bağlanıldı: ${name}`);
 
       // Kimlik bilgilerini yerel olarak kaydet
       try {
         const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
-        FileSystem.writeAsStringAsync(credentialsPath, JSON.stringify({ name, plate, phone }));
+        FileSystem.writeAsStringAsync(credentialsPath, JSON.stringify({ name, plate, phone, serverIp }));
       } catch (err) {
         console.log("Kimlik bilgileri kaydedilemedi:", err);
       }
@@ -518,6 +586,7 @@ export default function App() {
       // Eğer ilk defa bağlanmaya çalışıp hata aldıysa, döngüyü durdur ve uyarı ver.
       if (!hasConnected) {
         Alert.alert("Bağlantı Hatası", `Sunucuya bağlanılamadı. Lütfen IP adresinin doğru olduğundan ve telefonunuzun bilgisayarla aynı Wi-Fi ağına bağlı olduğundan emin olun.`);
+        setIsConnecting(false);
         newSocket.disconnect();
       }
     });
@@ -595,6 +664,41 @@ export default function App() {
 
     setSocket(newSocket);
   };
+
+  const handleUpdateProfile = () => {
+    if (!name || !plate || !phone) {
+      Alert.alert('Uyarı', 'Lütfen tüm alanları doldurun.');
+      return;
+    }
+    const nameRegex = /^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]{3,}$/;
+    if (!nameRegex.test(name.trim())) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir isim soyisim giriniz.');
+      return;
+    }
+    const phoneRegex = /^(05|5)[0-9]{9}$/;
+    if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir telefon numarası giriniz.');
+      return;
+    }
+    const plateClean = plate.replace(/\s/g, '');
+    const plateRegex = /^34T[A-Z0-9]{2,6}$/i;
+    if (!plateRegex.test(plateClean)) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir İstanbul Taksi plakası giriniz.');
+      return;
+    }
+
+    try {
+      const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
+      FileSystem.writeAsStringAsync(credentialsPath, JSON.stringify({ name, plate, phone, serverIp }));
+    } catch (err) {}
+
+    if (socket) {
+      socket.emit('update_profile', { name, plate, phone });
+    }
+    setShowProfileModal(false);
+    Alert.alert('Başarılı', 'Profil bilgileriniz güncellendi.');
+  };
+
   const handleSOS = () => {
     if (!socket) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -676,9 +780,13 @@ export default function App() {
 
   if (!isConnected) {
     return (
-      <View style={[styles.container, { backgroundColor: '#000000' }]}>
-        <View style={[styles.loginOverlay, { backgroundColor: '#000000' }]}>
-          <View style={[styles.loginBox, { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0 }]}>
+      <KeyboardAvoidingView 
+        style={[styles.container, { backgroundColor: '#000000' }]} 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }} keyboardShouldPersistTaps="handled" style={{ width: '100%' }}>
+          <View style={[styles.loginOverlay, { backgroundColor: '#000000' }]}>
+            <View style={[styles.loginBox, { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0 }]}>
             <Animated.Image 
               source={require('../assets/images/logo.png')} 
               style={{ 
@@ -695,19 +803,27 @@ export default function App() {
             />
             
             <Animated.View style={{ opacity: splashFormOpacity }}>
-              <Text style={styles.title}>Taksi SOS</Text>
               <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
               <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
               <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
-              <TextInput style={styles.input} value={serverIp} onChangeText={setServerIp} placeholder="Sunucu Adresi (örn: http://172.2.3.114:5000)" placeholderTextColor="#999" />
+              <TextInput style={styles.input} value={serverIp} onChangeText={setServerIp} placeholder="Sunucu IP (örn: http://192.168.1.5:5000)" autoCapitalize="none" placeholderTextColor="#999" />
 
-              <TouchableOpacity style={styles.connectButton} onPress={handleConnect}>
-                <Text style={styles.connectButtonText}>Lokal Sunucuya Bağlan</Text>
+              <TouchableOpacity 
+                style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} 
+                onPress={handleConnect}
+                disabled={isConnecting}
+              >
+                {isConnecting ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.connectButtonText}>Giriş Yap</Text>
+                )}
               </TouchableOpacity>
             </Animated.View>
           </View>
         </View>
-      </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     );
   }
 
@@ -952,6 +1068,36 @@ export default function App() {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Sol Alt Profil Düzenle Butonu */}
+      <View style={{ position: 'absolute', bottom: 40, left: 20, zIndex: 100 }}>
+        <TouchableOpacity 
+          style={{ backgroundColor: '#ff3b30', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5, flexDirection: 'row', alignItems: 'center' }} 
+          onPress={() => setShowProfileModal(true)}
+        >
+          <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 14 }}>Profili Düzenle</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Profil Düzenleme Modalı */}
+      <Modal visible={showProfileModal} animationType="slide" transparent={true} onRequestClose={() => setShowProfileModal(false)}>
+        <KeyboardAvoidingView style={styles.loginOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={[styles.loginBox, { backgroundColor: '#1e1e1e' }]}>
+            <Text style={styles.title}>Profili Düzenle</Text>
+            <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
+            <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
+            <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34 T 1234)" autoCapitalize="characters" placeholderTextColor="#999" />
+            
+            <TouchableOpacity style={styles.connectButton} onPress={handleUpdateProfile}>
+              <Text style={styles.connectButtonText}>Güncelle</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={() => setShowProfileModal(false)}>
+              <Text style={{ color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }}>İptal</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
     </View>
   );
