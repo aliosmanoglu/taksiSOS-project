@@ -1,12 +1,21 @@
 const express = require('express');
-
-
 const app = express();
 const http = require('http');
 const {Server} = require('socket.io');
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
+const { Expo } = require('expo-server-sdk');
+
+// Initialize Expo Push Client
+const expo = new Expo();
+
+// Initialize Firebase Admin SDK
+const serviceAccount = require('./firebase-service-account.json');
+initializeApp({
+  credential: cert(serviceAccount)
+});
 
 const port = process.env.PORT || 5000;
-
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -24,6 +33,9 @@ app.use(express.static('public'));
 let users = [
 
 ];
+
+// Uygulamayı kapatan kişileri de hatırlamak için kalıcı (sunucu kapanana kadar) bir liste
+let registeredDevices = [];
 
 const calculateKilometers = (lat1, lon1, lat2, lon2) => {
     const R = 6371; // Dünyanın yarıçapı (km)
@@ -46,18 +58,53 @@ io.on('connection', (socket) => {
     
     console.log('a user connected: ' + socket.id);
 
-    socket.on('connect_sos', (data) => {
-        let user = {
-            id: socket.id,
-            name : data.name,
-            plate : data.plate || '',
-            phone : data.phone || '',
-            lat : data.lat,
-            lon : data.lon,
-            activeRoom: null
+    socket.on('connect_sos', async (data) => {
+        try {
+            let uid = "anonymous_" + socket.id;
+            
+            // Eğer Firebase token gönderilmişse doğrula
+            if (data.firebaseToken) {
+                const decodedToken = await getAuth().verifyIdToken(data.firebaseToken);
+                uid = decodedToken.uid;
+            }
+
+            let user = {
+                id: socket.id,
+                uid: uid,
+                name : data.name,
+                plate : data.plate || '',
+                phone : data.phone || '',
+                lat : data.lat,
+                lon : data.lon,
+                pushToken: data.pushToken || null,
+                activeRoom: null
+            };
+            users.push(user);
+            io.emit('all_users_update', users);
+
+            // Push token varsa ve uygulamayı kapatırsa diye kalıcı listeye de ekle/güncelle
+            if (data.pushToken) {
+                let existingDevice = registeredDevices.find(d => d.pushToken === data.pushToken);
+                if (existingDevice) {
+                    existingDevice.lat = data.lat;
+                    existingDevice.lon = data.lon;
+                    existingDevice.name = data.name;
+                } else {
+                    registeredDevices.push({
+                        pushToken: data.pushToken,
+                        name: data.name,
+                        lat: data.lat,
+                        lon: data.lon
+                    });
+                }
+            }
+            
+            // Başarılı bağlantıyı bildir
+            socket.emit('connect_success');
+        } catch (error) {
+            console.log("Firebase yetkilendirme hatası:", error);
+            socket.emit('connect_error', 'Yetkisiz giriş: Geçersiz token.');
         }
-        users.push(user);
-        io.emit('all_users_update', users);
     });
 
     socket.on("location_update", (data) => {
@@ -103,7 +150,7 @@ io.on('connection', (socket) => {
 
     });
 
-    socket.on('sos_trigger', () => {
+    socket.on('sos_trigger', async () => {
 
         let user = users.find(u => u.id === socket.id);
 
@@ -117,21 +164,52 @@ io.on('connection', (socket) => {
         socket.join(roomName);
         io.emit('all_users_update', users);
         
+        let pushMessages = [];
         
+        // Sadece online olanlara soket üzerinden anlık bildirim (Uygulaması açık olanlar)
         users.forEach(u => {
-
             let km = calculateKilometers(lat, lon, u.lat, u.lon);
             if(km <= 5 && u.id !== socket.id){
                 io.to(u.id).emit('sos_alert', {
-                    from: users.find(us => us.id === socket.id).name,
+                    from: user.name,
                     lat: lat,
                     lon: lon,
                     distance: km,
                     roomName,
                 });
             }
+        });
 
-        })
+        // Uygulaması KAPALI veya açık fark etmeksizin herkese Push Notification
+        // Burada `registeredDevices` kullanıyoruz çünkü `users` dizisinden düşmüş (çıkmış) olabilirler.
+        registeredDevices.forEach(device => {
+            let km = calculateKilometers(lat, lon, device.lat, device.lon);
+            // Kendimize push atmamak için ufak bir kontrol (aynı pushToken ise)
+            if (km <= 5 && device.pushToken !== user.pushToken) {
+                if (Expo.isExpoPushToken(device.pushToken)) {
+                    pushMessages.push({
+                        to: device.pushToken,
+                        sound: 'default',
+                        title: '🚨 ACİL YARDIM ÇAĞRISI!',
+                        body: `${user.name} isimli kullanıcıdan bir SOS çağrısı aldınız (${km.toFixed(2)} km)`,
+                        data: { roomName: roomName, lat: lat, lon: lon, type: 'sos_alert' },
+                        priority: 'high'
+                    });
+                }
+            }
+        });
+
+        // Push bildirimlerini gönder
+        if (pushMessages.length > 0) {
+            let chunks = expo.chunkPushNotifications(pushMessages);
+            for (let chunk of chunks) {
+                try {
+                    await expo.sendPushNotificationsAsync(chunk);
+                } catch (error) {
+                    console.error("Push Notification gönderme hatası:", error);
+                }
+            }
+        }
 
         
     });
@@ -165,6 +243,23 @@ io.on('connection', (socket) => {
         if(user && user.activeRoom === room) {
             user.activeRoom = null;
             io.emit('all_users_update', users);
+        }
+    });
+
+    socket.on('update_profile', (data) => {
+        let user = users.find(u => u.id === socket.id);
+        if(user) {
+            user.name = data.name;
+            user.plate = data.plate;
+            user.phone = data.phone;
+            io.emit('all_users_update', users);
+
+            if (user.pushToken) {
+                let existingDevice = registeredDevices.find(d => d.pushToken === user.pushToken);
+                if (existingDevice) {
+                    existingDevice.name = data.name;
+                }
+            }
         }
     });
 

@@ -144,3 +144,7 @@ dist
 # End of https://www.toptal.com/developers/gitignore/api/node
 
 node_modules/
+
+# Gizli Anahtarlar ve Sertifikalar
+firebase-service-account.json
+*.p8
