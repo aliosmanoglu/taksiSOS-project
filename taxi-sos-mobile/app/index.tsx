@@ -133,8 +133,9 @@ export default function App() {
   const [name, setName] = useState("");
   const [plate, setPlate] = useState("");
   const [phone, setPhone] = useState("");
-  const [serverIp, setServerIp] = useState("http://172.2.2.172:5000");
+  const [serverIp, setServerIp] = useState("https://taksisos-project.onrender.com");
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [isAutoLoginTriggered, setIsAutoLoginTriggered] = useState(false);
 
   const [mapRegion, setMapRegion] = useState({
     latitude: 41.0082,
@@ -344,7 +345,7 @@ export default function App() {
           if (data.name) setName(data.name);
           if (data.plate) setPlate(data.plate);
           if (data.phone) setPhone(data.phone);
-          if (data.serverIp) setServerIp(data.serverIp);
+          // if (data.serverIp) setServerIp(data.serverIp); // Sabit sunucu adresi kullanıyoruz
         }
       } catch (err) {
         console.log("Kimlik bilgileri yüklenirken hata oluştu:", err);
@@ -367,50 +368,52 @@ export default function App() {
     }
   }, [sosActive]);
 
-  // --- TEST İÇİN SAHTE KONUM VE HAREKET ---
+  // --- GERÇEK CANLI KONUM TAKİBİ ---
   useEffect(() => {
-    let testInterval: NodeJS.Timeout | null = null;
+    let locationSubscription: Location.LocationSubscription | null = null;
 
-    const startWatchingLocation = () => {
+    const startWatchingLocation = async () => {
       if (isConnected && socket) {
-        // Cihazlar tam üst üste binmesin diye çok ufak rastgele bir sapma ekliyoruz.
-        const offsetLat = (Math.random() - 0.5) * 0.005;
-        const offsetLon = (Math.random() - 0.5) * 0.005;
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== 'granted') {
+             return;
+          }
 
-        // Herkes İstanbul'un merkezinde başlayacak
-        let currentTestLat = 41.0082 + offsetLat;
-        let currentTestLon = 28.9784 + offsetLon;
+          locationSubscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.High,
+              timeInterval: 5000,
+              distanceInterval: 10,
+            },
+            (location) => {
+              const currentLat = location.coords.latitude;
+              const currentLon = location.coords.longitude;
 
-        // İlk konumu gönder
-        setMapRegion(prev => ({ ...prev, latitude: currentTestLat, longitude: currentTestLon }));
-        socket.emit('live_location', { id: socket.id, lat: currentTestLat, lon: currentTestLon });
+              setMapRegion(prev => ({
+                ...prev,
+                latitude: currentLat,
+                longitude: currentLon,
+              }));
 
-        // Her 3 saniyede bir konumu güncelle ve GÖZLE GÖRÜLÜR şekilde hareket ettir
-        testInterval = setInterval(() => {
-          // Gözle görülür bir hareket için sapmayı artırdık (yaklaşık 100 metre)
-          currentTestLat += 0.001; 
-          currentTestLon += 0.001;
-
-          setMapRegion(prev => ({
-            ...prev,
-            latitude: currentTestLat,
-            longitude: currentTestLon,
-          }));
-
-          socket.emit('live_location', {
-            id: socket.id,
-            lat: currentTestLat,
-            lon: currentTestLon,
-          });
-        }, 3000);
+              socket.emit('live_location', {
+                id: socket.id,
+                lat: currentLat,
+                lon: currentLon,
+              });
+            }
+          );
+        } catch (err) {
+          console.log("Konum takibi başlatılamadı:", err);
+        }
       }
     };
 
     startWatchingLocation();
 
     return () => {
-      if (testInterval) {
-        clearInterval(testInterval);
+      if (locationSubscription) {
+        locationSubscription.remove();
       }
     };
   }, [isConnected, socket]);
@@ -449,11 +452,10 @@ export default function App() {
     setIsConnecting(true);
 
     // İzinleri ve konum bilgisini al:
-    let currentLat = 41.0082; // varsayılan fallback (TEST İÇİN SABİT)
+    let currentLat = 41.0082; // varsayılan fallback
     let currentLon = 28.9784;
 
-    /*
-    // --- GERÇEK İZİN VE KONUM ALMA KODU (Yedek) ---
+    // --- GERÇEK İZİN VE KONUM ALMA KODU ---
     try {
       // 1. Konum izinlerini iste
       const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
@@ -462,20 +464,24 @@ export default function App() {
       await Audio.requestPermissionsAsync();
 
       if (locStatus === 'granted') {
-        // 3. Konum servisleri açık mı kontrol et
-        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        // Web'de hasServicesEnabledAsync desteklenmeyebilir veya sorunlu olabilir, bu yüzden web için true sayıyoruz
+        const servicesEnabled = Platform.OS === 'web' ? true : await Location.hasServicesEnabledAsync();
         if (servicesEnabled) {
           try {
-            // Önce en hızlı şekilde son bilinen konumu almayı dene
-            const lastKnown = await Location.getLastKnownPositionAsync({});
-            if (lastKnown) {
-              currentLat = lastKnown.coords.latitude;
-              currentLon = lastKnown.coords.longitude;
+            let currentLoc = null;
+            // Web'de getLastKnownPositionAsync her zaman çalışmayabilir, doğrudan getCurrentPosition kullanmak daha güvenlidir
+            if (Platform.OS !== 'web') {
+              currentLoc = await Location.getLastKnownPositionAsync({});
+            }
+
+            if (currentLoc) {
+              currentLat = currentLoc.coords.latitude;
+              currentLon = currentLoc.coords.longitude;
             } else {
-              // Son bilinen konum yoksa, getCurrentPositionAsync dene (3 saniye zaman aşımı ile)
-              const currentLoc = await Promise.race([
+              // Web tarayıcılarında ilk konumun bulunması (özellikle Wi-Fi ile) 10-15 saniye sürebilir, timeout uzatıldı
+              currentLoc = await Promise.race([
                 Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-                new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
+                new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 15000))
               ]) as Location.LocationObject | null;
 
               if (currentLoc) {
@@ -502,14 +508,6 @@ export default function App() {
       console.log("Konum izin veya veri hatası:", e);
     }
     // ---------------------------------------------
-    */
-
-    try {
-      // Sadece ses izni istiyoruz, konumu test için sabitledik
-      await Audio.requestPermissionsAsync();
-    } catch (e) {
-      console.log("Ses kayıt izni hatası:", e);
-    }
 
     setMapRegion({
       ...mapRegion,
@@ -665,6 +663,14 @@ export default function App() {
     setSocket(newSocket);
   };
 
+  useEffect(() => {
+    // Kayıtlı bilgiler yüklendiğinde otomatik giriş yap
+    if (name && plate && phone && !isAutoLoginTriggered && !isConnected && !isConnecting) {
+      setIsAutoLoginTriggered(true);
+      handleConnect();
+    }
+  }, [name, plate, phone, isConnected, isConnecting, isAutoLoginTriggered]);
+
   const handleUpdateProfile = () => {
     if (!name || !plate || !phone) {
       Alert.alert('Uyarı', 'Lütfen tüm alanları doldurun.');
@@ -806,7 +812,6 @@ export default function App() {
               <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
               <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
               <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
-              <TextInput style={styles.input} value={serverIp} onChangeText={setServerIp} placeholder="Sunucu IP (örn: http://192.168.1.5:5000)" autoCapitalize="none" placeholderTextColor="#999" />
 
               <TouchableOpacity 
                 style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} 
@@ -1028,9 +1033,17 @@ export default function App() {
       <View style={{ position: 'absolute', top: 40, right: 20, zIndex: 100 }}>
         <TouchableOpacity
           style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}
-          onPress={() => {
+          onPress={async () => {
             if (socket) socket.disconnect();
             setIsConnected(false);
+            try {
+              const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
+              await FileSystem.deleteAsync(credentialsPath, { idempotent: true });
+              setName("");
+              setPlate("");
+              setPhone("");
+              setIsAutoLoginTriggered(false);
+            } catch(e) {}
           }}
         >
           <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>Çıkış Yap</Text>
