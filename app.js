@@ -150,6 +150,7 @@ io.on('connection', (socket) => {
                 activeArchives[user.activeRoom].locationHistory.push({
                     id: user.id,
                     name: user.name,
+                    plate: user.plate,
                     lat: data.lat,
                     lon: data.lon,
                     timestamp: Date.now(),
@@ -170,6 +171,7 @@ io.on('connection', (socket) => {
                 activeArchives[user.activeRoom].locationHistory.push({
                     id: user.id,
                     name: user.name,
+                    plate: user.plate,
                     lat: data.lat,
                     lon: data.lon,
                     timestamp: Date.now(),
@@ -227,6 +229,7 @@ io.on('connection', (socket) => {
             locationHistory: [{
                 id: user.id,
                 name: user.name,
+                plate: user.plate,
                 lat: lat,
                 lon: lon,
                 timestamp: Date.now(),
@@ -322,6 +325,7 @@ io.on('connection', (socket) => {
                 activeArchives[room].locationHistory.push({
                     id: user.id,
                     name: user.name,
+                    plate: user.plate,
                     lat: user.lat,
                     lon: user.lon,
                     timestamp: Date.now(),
