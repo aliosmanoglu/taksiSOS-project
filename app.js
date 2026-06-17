@@ -1,7 +1,7 @@
 const express = require('express');
 const app = express();
 const http = require('http');
-const {Server} = require('socket.io');
+const { Server } = require('socket.io');
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { getFirestore } = require('firebase-admin/firestore');
@@ -72,27 +72,27 @@ const calculateKilometers = (lat1, lon1, lat2, lon2) => {
     const R = 6371; // Dünyanın yarıçapı (km)
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
-        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c; 
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
 }
 
 
 app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/index.html');    
+    res.sendFile(__dirname + '/index.html');
 });
 
 
 io.on('connection', (socket) => {
-    
+
     console.log('a user connected: ' + socket.id);
 
     socket.on('connect_sos', async (data) => {
         try {
             let uid = "anonymous_" + socket.id;
-            
+
             // Eğer Firebase token gönderilmişse doğrula
             if (data.firebaseToken) {
                 const decodedToken = await getAuth().verifyIdToken(data.firebaseToken);
@@ -102,11 +102,11 @@ io.on('connection', (socket) => {
             let user = {
                 id: socket.id,
                 uid: uid,
-                name : data.name,
-                plate : data.plate || '',
-                phone : data.phone || '',
-                lat : data.lat,
-                lon : data.lon,
+                name: data.name,
+                plate: data.plate || '',
+                phone: data.phone || '',
+                lat: data.lat,
+                lon: data.lon,
                 pushToken: data.pushToken || null,
                 activeRoom: null
             };
@@ -129,7 +129,7 @@ io.on('connection', (socket) => {
                     });
                 }
             }
-            
+
             // Başarılı bağlantıyı bildir
             socket.emit('connect_success');
         } catch (error) {
@@ -141,7 +141,7 @@ io.on('connection', (socket) => {
     socket.on("location_update", (data) => {
         let user = users.find(u => u.id === data.id);
 
-        if(user) {
+        if (user) {
             user.lat = data.lat;
             user.lon = data.lon;
             io.emit('all_users_update', users);
@@ -150,19 +150,19 @@ io.on('connection', (socket) => {
 
     socket.on('live_location', (data) => {
         let user = users.find(u => u.id === data.id);
-        if(user) {
+        if (user) {
             user.lat = data.lat;
             user.lon = data.lon;
             io.emit('all_users_update', users);
         }
-        
+
         users.forEach(u => {
-            if(u.id != data.id) {
-              
+            if (u.id != data.id) {
 
-                let km = calculateKilometers(data.lat, data.lon, u.lat, u.lon); 
 
-                if(km <= 5) {
+                let km = calculateKilometers(data.lat, data.lon, u.lat, u.lon);
+
+                if (km <= 5) {
                     io.to(u.id).emit('location_update', {
                         id: data.id,
                         lat: data.lat,
@@ -185,7 +185,7 @@ io.on('connection', (socket) => {
 
         let user = users.find(u => u.id === socket.id);
 
-        if(!user) return;
+        if (!user) return;
 
         let lat = user.lat;
         let lon = user.lon;
@@ -194,13 +194,23 @@ io.on('connection', (socket) => {
         user.activeRoom = roomName;
         socket.join(roomName);
         io.emit('all_users_update', users);
-        
+
+        // Start Archive
+        activeArchives[roomName] = {
+            id: roomName + "_" + Date.now(),
+            startTime: Date.now(),
+            creator: { name: user.name, phone: user.phone, plate: user.plate, id: user.id },
+            helpers: [],
+            messages: [],
+            location: { lat: lat, lon: lon }
+        };
+
         let pushMessages = [];
-        
+
         // Sadece online olanlara soket üzerinden anlık bildirim (Uygulaması açık olanlar)
         users.forEach(u => {
             let km = calculateKilometers(lat, lon, u.lat, u.lon);
-            if(km <= 5 && u.id !== socket.id){
+            if (km <= 5 && u.id !== socket.id) {
                 io.to(u.id).emit('sos_alert', {
                     from: user.name,
                     lat: lat,
@@ -242,36 +252,51 @@ io.on('connection', (socket) => {
             }
         }
 
-        
+
     });
 
 
     socket.on('end_sos', (roomName) => {
         io.emit('sos_ended', { room: roomName });
-        
+
         users.forEach(u => {
-            if(u.activeRoom === roomName) {
+            if (u.activeRoom === roomName) {
                 u.activeRoom = null;
             }
         });
-        
+
         io.in(roomName).socketsLeave(roomName);
         io.emit('all_users_update', users);
+
+        // Save archive to Firestore
+        if (activeArchives[roomName]) {
+            let archiveData = activeArchives[roomName];
+            archiveData.endTime = Date.now();
+            db.collection('sos_archives').doc(archiveData.id).set(archiveData).catch(err => console.error("Firestore save error:", err));
+            delete activeArchives[roomName];
+        }
     });
 
     socket.on('join_sos_room', (room) => {
         socket.join(room);
         let user = users.find(u => u.id === socket.id);
-        if(user) {
+        if (user) {
             user.activeRoom = room;
             io.emit('all_users_update', users);
+
+            if (activeArchives[room] && room !== "sos_room_" + user.phone) {
+                let existing = activeArchives[room].helpers.find(h => h.phone === user.phone);
+                if (!existing) {
+                    activeArchives[room].helpers.push({ name: user.name, phone: user.phone, plate: user.plate });
+                }
+            }
         }
     });
 
     socket.on('leave_sos_room', (room) => {
         socket.leave(room);
         let user = users.find(u => u.id === socket.id);
-        if(user && user.activeRoom === room) {
+        if (user && user.activeRoom === room) {
             user.activeRoom = null;
             io.emit('all_users_update', users);
         }
@@ -279,7 +304,7 @@ io.on('connection', (socket) => {
 
     socket.on('update_profile', (data) => {
         let user = users.find(u => u.id === socket.id);
-        if(user) {
+        if (user) {
             user.name = data.name;
             user.plate = data.plate;
             user.phone = data.phone;
@@ -295,13 +320,24 @@ io.on('connection', (socket) => {
     });
 
     socket.on('voice_message', (data) => {
-            let sender = users.find(u => u.id === socket.id);
-            let senderName = sender ? sender.name : "Bir Kullanıcı";
-            let msgId = Date.now().toString();
+        let sender = users.find(u => u.id === socket.id);
+        let senderName = sender ? sender.name : "Bir Kullanıcı";
+        let msgId = Date.now().toString();
 
-            socket.to(data.room).emit('play_voice', { audio: data.audio, senderName: senderName, id: msgId });
-            
-            io.in(data.room).emit('chat_message', {
+        socket.to(data.room).emit('play_voice', { audio: data.audio, senderName: senderName, id: msgId });
+
+        io.in(data.room).emit('chat_message', {
+            id: msgId,
+            type: 'audio',
+            content: data.audio,
+            senderName: senderName,
+            senderId: socket.id,
+            timestamp: Date.now(),
+            duration: data.duration
+        });
+
+        if (activeArchives[data.room]) {
+            activeArchives[data.room].messages.push({
                 id: msgId,
                 type: 'audio',
                 content: data.audio,
@@ -310,13 +346,24 @@ io.on('connection', (socket) => {
                 timestamp: Date.now(),
                 duration: data.duration
             });
+        }
+    });
+
+    socket.on('text_message', (data) => {
+        let sender = users.find(u => u.id === socket.id);
+        let senderName = sender ? sender.name : "Bir Kullanıcı";
+
+        io.in(data.room).emit('chat_message', {
+            id: Date.now().toString() + Math.random().toString(),
+            type: 'text',
+            content: data.text,
+            senderName: senderName,
+            senderId: socket.id,
+            timestamp: Date.now()
         });
 
-        socket.on('text_message', (data) => {
-            let sender = users.find(u => u.id === socket.id);
-            let senderName = sender ? sender.name : "Bir Kullanıcı";
-            
-            io.in(data.room).emit('chat_message', {
+        if (activeArchives[data.room]) {
+            activeArchives[data.room].messages.push({
                 id: Date.now().toString() + Math.random().toString(),
                 type: 'text',
                 content: data.text,
@@ -324,10 +371,11 @@ io.on('connection', (socket) => {
                 senderId: socket.id,
                 timestamp: Date.now()
             });
-        });
+        }
+    });
     socket.on('disconnect', () => {
         console.log('user disconnected: ' + socket.id);
-        
+
         let user = users.find(u => u.id === socket.id);
         if (user && user.activeRoom) {
             let device = registeredDevices.find(d => d.pushToken === user.pushToken);
@@ -347,5 +395,5 @@ io.on('connection', (socket) => {
         io.emit('all_users_update', users);
     });
 
-} );
+});
 
