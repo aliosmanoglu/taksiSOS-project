@@ -20,8 +20,6 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
-// Expo Go'da push notification desteklenmediği için çıkan kırmızı ekran hatasını gizler.
-// Lokal bildirimler çalışmaya devam eder.
 const originalConsoleError = console.error;
 console.error = (...args) => {
   if (typeof args[0] === 'string' && args[0].includes('expo-notifications')) {
@@ -29,7 +27,6 @@ console.error = (...args) => {
   }
   originalConsoleError(...args);
 };
-// --------------------------------------------------------------
 
 const Notifications = require('expo-notifications');
 
@@ -96,6 +93,30 @@ async function registerForPushNotificationsAsync() {
 
 export default function App() {
   const lastNotificationResponse = Notifications.useLastNotificationResponse();
+  
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [name, setName] = useState("");
+  const [plate, setPlate] = useState("");
+  const [phone, setPhone] = useState("");
+  const [serverIp, setServerIp] = useState("https://taksisos-project.onrender.com");
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [isAutoLoginTriggered, setIsAutoLoginTriggered] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  const [mapRegion, setMapRegion] = useState({
+    latitude: 41.0082,
+    longitude: 28.9784,
+    latitudeDelta: 0.05,
+    longitudeDelta: 0.05,
+  });
+
+  const [pageMode, setPageMode] = useState<'home' | 'room'>('home');
+  const [sosNotifications, setSosNotifications] = useState<SosNotification[]>([]);
+
+  const [sosActive, setSosActive] = useState(false); // Ben SOS verdim mi?
+  const [activeSOSRoom, setActiveSOSRoom] = useState<string | null>(null); // Hangi odadayım?
 
   useEffect(() => {
     if (
@@ -106,18 +127,29 @@ export default function App() {
       const roomName = lastNotificationResponse.notification.request.content.data.roomName;
       setActiveSOSRoom(roomName);
       setPageMode('room');
+      
+      if (socket) {
+        socket.emit('join_sos_room', roomName);
+      }
     }
-  }, [lastNotificationResponse]);
+  }, [lastNotificationResponse, socket]);
+
+  useEffect(() => {
+    if (activeSOSRoom) {
+      AsyncStorage.setItem('activeSOSRoom', activeSOSRoom).catch(() => {});
+    } else {
+      AsyncStorage.removeItem('activeSOSRoom').catch(() => {});
+    }
+  }, [activeSOSRoom]);
+
   const splashLogoTranslateY = useRef(new Animated.Value(Dimensions.get('window').height / 4)).current;
   const splashLogoScale = useRef(new Animated.Value(2)).current;
   const splashFormOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Uygulama açılış animasyonu: Kendi özel splash ekranımız
     SplashScreen.preventAutoHideAsync().catch(() => {});
     
     setTimeout(() => {
-      // Orijinal splash'i gizle ve pürüzsüz animasyonu başlat
       SplashScreen.hideAsync().catch(() => {});
       
       Animated.parallel([
@@ -138,42 +170,11 @@ export default function App() {
           useNativeDriver: true,
         })
       ]).start();
-    }, 1500); // Siyah ekranda logoyu 1.5 saniye tut
+    }, 1500); 
   }, []);
 
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [name, setName] = useState("");
-  const [plate, setPlate] = useState("");
-  const [phone, setPhone] = useState("");
-  const [serverIp, setServerIp] = useState("https://taksisos-project.onrender.com");
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const [isAutoLoginTriggered, setIsAutoLoginTriggered] = useState(false);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-
-  const [mapRegion, setMapRegion] = useState({
-    latitude: 41.0082,
-    longitude: 28.9784,
-    latitudeDelta: 0.05,
-    longitudeDelta: 0.05,
-  });
-
-  // State Management for UI
-  const [pageMode, setPageMode] = useState<'home' | 'room'>('home');
-  const [sosNotifications, setSosNotifications] = useState<SosNotification[]>([]);
-
-  const [sosActive, setSosActive] = useState(false); // Ben SOS verdim mi?
-  const [activeSOSRoom, setActiveSOSRoom] = useState<string | null>(null); // Hangi odadayım?
-
-  useEffect(() => {
-    if (activeSOSRoom) {
-      AsyncStorage.setItem('activeSOSRoom', activeSOSRoom).catch(() => {});
-    } else {
-      AsyncStorage.removeItem('activeSOSRoom').catch(() => {});
-    }
-  }, [activeSOSRoom]);
   const [roomUsers, setRoomUsers] = useState<any[]>([]); // Haritada göstermek için diğer kişilerin konumu.
+
   const [followMode, setFollowMode] = useState<'none' | 'me' | 'sos'>('none'); // Harita kimi takip edecek?
 
   const [logs, setLogs] = useState<{ id: string, msg: string }[]>([]);
@@ -597,6 +598,31 @@ export default function App() {
 
     newSocket.on('all_users_update', (usersData: any[]) => {
       setRoomUsers(usersData);
+      
+      // Aktif SOS odalarını bul ve "Tekrar Katıl" butonunun çıkması için bildirimlere ekle
+      const activeSOS = usersData.filter(u => u.activeRoom && u.activeRoom.startsWith('sos_room_'));
+      setSosNotifications(prev => {
+         let newNotifs = [...prev];
+         activeSOS.forEach(sosUser => {
+             const roomName = sosUser.activeRoom;
+             // Eğer bu odanın bildirimi zaten varsa veya kendi odamızsa ekleme
+             if (!newNotifs.find(n => n.roomName === roomName) && roomName !== "sos_room_" + phone) {
+                 const latDiff = currentLat - sosUser.lat;
+                 const lonDiff = currentLon - sosUser.lon;
+                 // Basit kuş uçuşu mesafe formülü
+                 const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111; 
+                 
+                 newNotifs.push({
+                     roomName: roomName,
+                     lat: sosUser.lat,
+                     lon: sosUser.lon,
+                     distance: distance,
+                     from: sosUser.name
+                 });
+             }
+         });
+         return newNotifs;
+      });
     });
 
     newSocket.on('sos_alert', async (data: any) => {

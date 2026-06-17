@@ -4,20 +4,51 @@ const http = require('http');
 const {Server} = require('socket.io');
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
+const { getFirestore } = require('firebase-admin/firestore');
+const cors = require('cors');
 const { Expo } = require('expo-server-sdk');
 
 // Initialize Expo Push Client
 const expo = new Expo();
 
 // Initialize Firebase Admin SDK
-const serviceAccount = require('./firebase-service-account.json');
-initializeApp({
-  credential: cert(serviceAccount)
-});
+let serviceAccount;
+try {
+    if (process.env.FIREBASE_CREDENTIALS) {
+        // Eğer sunucuda (Render) environment variable olarak tanımlandıysa:
+        serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+    } else {
+        // Lokal geliştirme için dosya okunur:
+        serviceAccount = require('./firebase-service-account.json');
+    }
+    initializeApp({
+        credential: cert(serviceAccount)
+    });
+} catch (error) {
+    console.error("Firebase başlatılırken bir hata oluştu. Kimlik bilgileri eksik olabilir:", error);
+}
 
 const port = process.env.PORT || 5000;
 
 const server = http.createServer(app);
+const db = getFirestore();
+
+app.use(cors());
+app.use(express.json());
+
+let activeArchives = {};
+
+app.get('/api/sos-archives', async (req, res) => {
+    try {
+        const snapshot = await db.collection('sos_archives').orderBy('startTime', 'desc').get();
+        let archives = [];
+        snapshot.forEach(doc => archives.push({ id: doc.id, ...doc.data() }));
+        res.json(archives);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 const io = new Server(server, {
     cors: {
         origin: "*"
