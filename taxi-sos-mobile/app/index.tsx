@@ -95,6 +95,19 @@ async function registerForPushNotificationsAsync() {
 }
 
 export default function App() {
+  const lastNotificationResponse = Notifications.useLastNotificationResponse();
+
+  useEffect(() => {
+    if (
+      lastNotificationResponse &&
+      lastNotificationResponse.notification.request.content.data.roomName &&
+      lastNotificationResponse.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER
+    ) {
+      const roomName = lastNotificationResponse.notification.request.content.data.roomName;
+      setActiveSOSRoom(roomName);
+      setPageMode('room');
+    }
+  }, [lastNotificationResponse]);
   const splashLogoTranslateY = useRef(new Animated.Value(Dimensions.get('window').height / 4)).current;
   const splashLogoScale = useRef(new Animated.Value(2)).current;
   const splashFormOpacity = useRef(new Animated.Value(0)).current;
@@ -152,6 +165,14 @@ export default function App() {
 
   const [sosActive, setSosActive] = useState(false); // Ben SOS verdim mi?
   const [activeSOSRoom, setActiveSOSRoom] = useState<string | null>(null); // Hangi odadayım?
+
+  useEffect(() => {
+    if (activeSOSRoom) {
+      AsyncStorage.setItem('activeSOSRoom', activeSOSRoom).catch(() => {});
+    } else {
+      AsyncStorage.removeItem('activeSOSRoom').catch(() => {});
+    }
+  }, [activeSOSRoom]);
   const [roomUsers, setRoomUsers] = useState<any[]>([]); // Haritada göstermek için diğer kişilerin konumu.
   const [followMode, setFollowMode] = useState<'none' | 'me' | 'sos'>('none'); // Harita kimi takip edecek?
 
@@ -195,7 +216,7 @@ export default function App() {
     setFollowMode('sos');
     if (!mapRef.current || !activeSOSRoom) return;
 
-    if (socket && activeSOSRoom === "sos_room_" + socket.id) {
+    if (socket && activeSOSRoom === "sos_room_" + phone) {
       mapRef.current.animateToRegion({
         latitude: mapRegion.latitude,
         longitude: mapRegion.longitude,
@@ -205,7 +226,7 @@ export default function App() {
       return;
     }
 
-    const creatorUser = roomUsers.find(u => "sos_room_" + u.id === activeSOSRoom);
+    const creatorUser = roomUsers.find(u => "sos_room_" + u.phone === activeSOSRoom);
     if (creatorUser) {
       mapRef.current.animateToRegion({
         latitude: creatorUser.lat,
@@ -246,7 +267,7 @@ export default function App() {
         longitudeDelta: 0.01
       }, 500);
     } else if (followMode === 'sos' && activeSOSRoom) {
-      if (socket && activeSOSRoom === "sos_room_" + socket.id) {
+      if (socket && activeSOSRoom === "sos_room_" + phone) {
         mapRef.current.animateToRegion({
           latitude: mapRegion.latitude,
           longitude: mapRegion.longitude,
@@ -254,7 +275,7 @@ export default function App() {
           longitudeDelta: 0.01
         }, 500);
       } else {
-        const creatorUser = roomUsers.find(u => "sos_room_" + u.id === activeSOSRoom);
+        const creatorUser = roomUsers.find(u => "sos_room_" + u.phone === activeSOSRoom);
         if (creatorUser) {
           mapRef.current.animateToRegion({
             latitude: creatorUser.lat,
@@ -342,6 +363,14 @@ export default function App() {
         const storedData = await AsyncStorage.getItem('user_credentials');
         if (storedData) {
           const data = JSON.parse(storedData);
+          const storedRoom = await AsyncStorage.getItem('activeSOSRoom');
+          if (storedRoom) {
+            setActiveSOSRoom(storedRoom);
+            setPageMode('room');
+            if (storedRoom === "sos_room_" + data.phone) {
+              setSosActive(true);
+            }
+          }
           if (data.name) setName(data.name);
           if (data.plate) setPlate(data.plate);
           if (data.phone) setPhone(data.phone);
@@ -550,6 +579,12 @@ export default function App() {
         lon: currentLon,
         pushToken: pushToken
       });
+
+      AsyncStorage.getItem('activeSOSRoom').then(storedRoom => {
+        if (storedRoom) {
+           newSocket.emit('join_sos_room', storedRoom);
+        }
+      }).catch(()=>{});
       addLog(`✅ Bağlanıldı: ${name}`);
 
       // Kimlik bilgilerini yerel olarak kaydet
@@ -721,7 +756,7 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     socket.emit('sos_trigger');
     setSosActive(true);
-    const room = "sos_room_" + socket.id;
+    const room = "sos_room_" + phone;
     setActiveSOSRoom(room);
     setPageMode('room'); // Odaya otomatik geçiş
     addLog("🚨 SOS OLUŞTURULDU!");
@@ -881,7 +916,7 @@ export default function App() {
             <Text style={styles.headerButtonText}>⬅ Ana Sayfa</Text>
           </TouchableOpacity>
           <Text style={styles.roomTitle}>ACİL DURUM ODASI</Text>
-          {socket && activeSOSRoom === "sos_room_" + socket.id ? (
+          {socket && activeSOSRoom === "sos_room_" + phone ? (
             <TouchableOpacity style={styles.headerButtonRed} onPress={() => {
               Alert.alert(
                 "Emin misiniz?",
@@ -915,7 +950,7 @@ export default function App() {
               longitudeDelta: 0.02,
             }}
           >
-            {socket && activeSOSRoom === "sos_room_" + socket.id ? (
+            {socket && activeSOSRoom === "sos_room_" + phone ? (
               <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz (SOS)">
                 <View style={styles.sosMarkerContainer}>
                   <View style={styles.sosBadge}>
@@ -936,7 +971,7 @@ export default function App() {
 
               if (activeSOSRoom && u.activeRoom !== activeSOSRoom) return null;
 
-              const isCreator = activeSOSRoom === "sos_room_" + u.id;
+              const isCreator = activeSOSRoom === "sos_room_" + u.phone;
 
               if (isCreator) {
                 return (

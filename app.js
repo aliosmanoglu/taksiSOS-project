@@ -159,7 +159,7 @@ io.on('connection', (socket) => {
         let lat = user.lat;
         let lon = user.lon;
 
-        const roomName = "sos_room_" + socket.id;
+        const roomName = "sos_room_" + user.phone;
         user.activeRoom = roomName;
         socket.join(roomName);
         io.emit('all_users_update', users);
@@ -192,7 +192,7 @@ io.on('connection', (socket) => {
                         sound: 'default',
                         title: '🚨 ACİL YARDIM ÇAĞRISI!',
                         body: `${user.name} isimli kullanıcıdan bir SOS çağrısı aldınız (${km.toFixed(2)} km)`,
-                        data: { roomName: roomName, lat: lat, lon: lon, type: 'sos_alert' },
+                        data: { roomName: roomName, lat: lat, lon: lon, type: 'sos_alert', from: user.name },
                         priority: 'high'
                     });
                 }
@@ -296,6 +296,22 @@ io.on('connection', (socket) => {
         });
     socket.on('disconnect', () => {
         console.log('user disconnected: ' + socket.id);
+        
+        let user = users.find(u => u.id === socket.id);
+        if (user && user.activeRoom) {
+            let device = registeredDevices.find(d => d.pushToken === user.pushToken);
+            if (device && device.pushToken && Expo.isExpoPushToken(device.pushToken)) {
+                expo.sendPushNotificationsAsync([{
+                    to: device.pushToken,
+                    sound: 'default',
+                    title: '🚨 DİKKAT',
+                    body: 'Aktif bir SOS çağrısındayken bağlantınız koptu. Lütfen acil durum odasına geri dönün!',
+                    data: { roomName: user.activeRoom, type: 'sos_alert', from: user.name, lat: user.lat, lon: user.lon },
+                    priority: 'high'
+                }]).catch(err => console.error("Disconnect push hatası:", err));
+            }
+        }
+
         users = users.filter(u => u.id !== socket.id);
         io.emit('all_users_update', users);
     });
