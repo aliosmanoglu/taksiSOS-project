@@ -145,6 +145,17 @@ io.on('connection', (socket) => {
             user.lat = data.lat;
             user.lon = data.lon;
             io.emit('all_users_update', users);
+
+            if (user.activeRoom && activeArchives[user.activeRoom]) {
+                activeArchives[user.activeRoom].locationHistory.push({
+                    id: user.id,
+                    name: user.name,
+                    lat: data.lat,
+                    lon: data.lon,
+                    timestamp: Date.now(),
+                    isCreator: user.id === activeArchives[user.activeRoom].creator.id
+                });
+            }
         }
     });
 
@@ -154,6 +165,17 @@ io.on('connection', (socket) => {
             user.lat = data.lat;
             user.lon = data.lon;
             io.emit('all_users_update', users);
+
+            if (user.activeRoom && activeArchives[user.activeRoom]) {
+                activeArchives[user.activeRoom].locationHistory.push({
+                    id: user.id,
+                    name: user.name,
+                    lat: data.lat,
+                    lon: data.lon,
+                    timestamp: Date.now(),
+                    isCreator: user.id === activeArchives[user.activeRoom].creator.id
+                });
+            }
         }
 
         users.forEach(u => {
@@ -202,6 +224,14 @@ io.on('connection', (socket) => {
             creator: { name: user.name, phone: user.phone, plate: user.plate, id: user.id },
             helpers: [],
             messages: [],
+            locationHistory: [{
+                id: user.id,
+                name: user.name,
+                lat: lat,
+                lon: lon,
+                timestamp: Date.now(),
+                isCreator: true
+            }],
             location: { lat: lat, lon: lon }
         };
 
@@ -289,6 +319,14 @@ io.on('connection', (socket) => {
                 if (!existing) {
                     activeArchives[room].helpers.push({ name: user.name, phone: user.phone, plate: user.plate });
                 }
+                activeArchives[room].locationHistory.push({
+                    id: user.id,
+                    name: user.name,
+                    lat: user.lat,
+                    lon: user.lon,
+                    timestamp: Date.now(),
+                    isCreator: false
+                });
             }
         }
     });
