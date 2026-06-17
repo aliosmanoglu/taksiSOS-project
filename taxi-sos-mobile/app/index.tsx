@@ -13,6 +13,7 @@ import { io, Socket } from 'socket.io-client';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Device from 'expo-device';
@@ -136,6 +137,7 @@ export default function App() {
   const [serverIp, setServerIp] = useState("https://taksisos-project.onrender.com");
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [isAutoLoginTriggered, setIsAutoLoginTriggered] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   const [mapRegion, setMapRegion] = useState({
     latitude: 41.0082,
@@ -337,18 +339,29 @@ export default function App() {
   useEffect(() => {
     const loadCredentials = async () => {
       try {
-        const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
-        const fileInfo = await FileSystem.getInfoAsync(credentialsPath);
-        if (fileInfo.exists) {
-          const content = await FileSystem.readAsStringAsync(credentialsPath);
-          const data = JSON.parse(content);
+        const storedData = await AsyncStorage.getItem('user_credentials');
+        if (storedData) {
+          const data = JSON.parse(storedData);
           if (data.name) setName(data.name);
           if (data.plate) setPlate(data.plate);
           if (data.phone) setPhone(data.phone);
-          // if (data.serverIp) setServerIp(data.serverIp); // Sabit sunucu adresi kullanıyoruz
+        } else {
+          // Eski FileSystem verisi varsa AsyncStorage'a taşı
+          const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
+          const fileInfo = await FileSystem.getInfoAsync(credentialsPath);
+          if (fileInfo.exists) {
+            const content = await FileSystem.readAsStringAsync(credentialsPath);
+            const data = JSON.parse(content);
+            if (data.name) setName(data.name);
+            if (data.plate) setPlate(data.plate);
+            if (data.phone) setPhone(data.phone);
+            await AsyncStorage.setItem('user_credentials', content);
+          }
         }
       } catch (err) {
         console.log("Kimlik bilgileri yüklenirken hata oluştu:", err);
+      } finally {
+        setIsCheckingAuth(false);
       }
     };
     loadCredentials();
@@ -541,8 +554,7 @@ export default function App() {
 
       // Kimlik bilgilerini yerel olarak kaydet
       try {
-        const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
-        FileSystem.writeAsStringAsync(credentialsPath, JSON.stringify({ name, plate, phone, serverIp }));
+        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, serverIp }));
       } catch (err) {
         console.log("Kimlik bilgileri kaydedilemedi:", err);
       }
@@ -671,7 +683,7 @@ export default function App() {
     }
   }, [name, plate, phone, isConnected, isConnecting, isAutoLoginTriggered]);
 
-  const handleUpdateProfile = () => {
+  const handleUpdateProfile = async () => {
     if (!name || !plate || !phone) {
       Alert.alert('Uyarı', 'Lütfen tüm alanları doldurun.');
       return;
@@ -694,8 +706,7 @@ export default function App() {
     }
 
     try {
-      const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
-      FileSystem.writeAsStringAsync(credentialsPath, JSON.stringify({ name, plate, phone, serverIp }));
+      await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, serverIp }));
     } catch (err) {}
 
     if (socket) {
@@ -785,6 +796,35 @@ export default function App() {
   // --- RENDERING VIEWS ---
 
   if (!isConnected) {
+    if (isCheckingAuth || (isConnecting && isAutoLoginTriggered)) {
+      return (
+        <KeyboardAvoidingView 
+          style={[styles.container, { backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }]} 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={[styles.loginOverlay, { backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }]}>
+            <Animated.Image 
+              source={require('../assets/images/logo.png')} 
+              style={{ 
+                width: 120, 
+                height: 120, 
+                alignSelf: 'center', 
+                borderRadius: 25,
+                transform: [
+                  { translateY: splashLogoTranslateY },
+                  { scale: splashLogoScale }
+                ]
+              }} 
+            />
+            <Animated.View style={{ opacity: splashFormOpacity, alignItems: 'center' }}>
+              <ActivityIndicator size="large" color="#ffffff" style={{ marginTop: 30 }} />
+              <Text style={{ color: '#fff', marginTop: 15, fontSize: 16 }}>Bağlanıyor...</Text>
+            </Animated.View>
+          </View>
+        </KeyboardAvoidingView>
+      );
+    }
+
     return (
       <KeyboardAvoidingView 
         style={[styles.container, { backgroundColor: '#000000' }]} 
