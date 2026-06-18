@@ -1,5 +1,98 @@
-import React, { useState, useEffect } from 'react';
-import { Archive as ArchiveIcon, Clock, User, Phone, Play, FileText, AlertCircle, Calendar } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Archive as ArchiveIcon, Clock, User, Phone, Play, Pause, FileText, AlertCircle, Calendar, Users } from 'lucide-react';
+import LocationSimulation from './LocationSimulation';
+
+const CustomAudioPlayer = ({ base64Audio, duration }: { base64Audio: string, duration: number }) => {
+    const audioRef = useRef<HTMLAudioElement>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [progress, setProgress] = useState(0);
+
+    const togglePlay = () => {
+        if (!audioRef.current) return;
+        if (isPlaying) {
+            audioRef.current.pause();
+        } else {
+            audioRef.current.play();
+        }
+        setIsPlaying(!isPlaying);
+    };
+
+    const handleTimeUpdate = () => {
+        if (!audioRef.current) return;
+        const current = audioRef.current.currentTime;
+        const total = audioRef.current.duration;
+        if (total > 0) {
+            setProgress((current / total) * 100);
+        }
+    };
+
+    const handleEnded = () => {
+        setIsPlaying(false);
+        setProgress(0);
+    };
+
+    const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!audioRef.current) return;
+        const total = audioRef.current.duration;
+        if (!total) return;
+        const newTime = (parseFloat(e.target.value) / 100) * total;
+        audioRef.current.currentTime = newTime;
+        setProgress(parseFloat(e.target.value));
+    };
+
+    return (
+        <div style={{ 
+            display: 'flex', alignItems: 'center', gap: '12px', 
+            background: 'rgba(255, 255, 255, 0.08)', 
+            padding: '10px 15px', 
+            borderRadius: '24px', 
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
+            width: '260px' 
+        }}>
+            <button 
+                onClick={togglePlay}
+                style={{
+                    background: 'var(--accent-color)', border: 'none', borderRadius: '50%', 
+                    width: '36px', height: '36px', display: 'flex', justifyContent: 'center', 
+                    alignItems: 'center', cursor: 'pointer', color: '#fff', flexShrink: 0,
+                    boxShadow: '0 2px 8px rgba(88, 166, 255, 0.4)',
+                    transition: 'transform 0.2s'
+                }}
+                onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
+                onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
+            >
+                {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" style={{ marginLeft: '3px' }} />}
+            </button>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                <input 
+                    type="range" 
+                    min="0" max="100" 
+                    value={progress} 
+                    onChange={handleSeek}
+                    style={{
+                        width: '100%', height: '4px', cursor: 'pointer', 
+                        accentColor: 'var(--accent-color)',
+                        background: 'rgba(255,255,255,0.2)',
+                        borderRadius: '2px',
+                        appearance: 'none',
+                        outline: 'none'
+                    }} 
+                />
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', flexShrink: 0, minWidth: '35px', textAlign: 'right', fontWeight: '500' }}>
+                {Math.round(duration || 0)}sn
+            </div>
+            <audio 
+                ref={audioRef}
+                src={`data:audio/mp4;base64,${base64Audio}`} 
+                onTimeUpdate={handleTimeUpdate}
+                onEnded={handleEnded}
+                style={{ display: 'none' }}
+            />
+        </div>
+    );
+};
 
 export default function Archive({ serverIp }: { serverIp: string }) {
     const [archives, setArchives] = useState<any[]>([]);
@@ -128,6 +221,20 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                     )}
                                 </div>
                             </div>
+                            
+                            {selectedArchive.locationHistory && selectedArchive.locationHistory.length > 0 && (
+                                <div style={{ marginTop: '20px' }}>
+                                    <h3 style={{ fontSize: '14px', borderBottom: '1px solid var(--border-color)', paddingBottom: '5px', marginBottom: '10px' }}>
+                                        Harita Simülasyonu
+                                    </h3>
+                                    <LocationSimulation 
+                                        history={selectedArchive.locationHistory} 
+                                        messages={selectedArchive.messages}
+                                        startTime={selectedArchive.startTime} 
+                                        endTime={selectedArchive.endTime} 
+                                    />
+                                </div>
+                            )}
                         </div>
 
                         <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -159,12 +266,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                         </div>
                                         
                                         {msg.type === 'audio' ? (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                                <button onClick={() => playAudio(msg.content)} className="glass-button primary" style={{ padding: '8px', borderRadius: '50%', width: '35px', height: '35px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                                                    <Play size={14} fill="currentColor" />
-                                                </button>
-                                                <div style={{ fontSize: '13px' }}>Sesli Mesaj • {Math.round(msg.duration || 0)}sn</div>
-                                            </div>
+                                            <CustomAudioPlayer base64Audio={msg.content} duration={msg.duration} />
                                         ) : (
                                             <div style={{ fontSize: '14px', lineHeight: '1.4' }}>
                                                 {msg.content}

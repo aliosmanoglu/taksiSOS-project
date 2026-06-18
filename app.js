@@ -415,6 +415,30 @@ io.on('connection', (socket) => {
             });
         }
     });
+
+    // --- WebRTC Signaling Events ---
+    socket.on('webrtc_offer', (data) => {
+        io.to(data.targetId).emit('webrtc_offer', {
+            offer: data.offer,
+            senderId: socket.id
+        });
+    });
+
+    socket.on('webrtc_answer', (data) => {
+        io.to(data.targetId).emit('webrtc_answer', {
+            answer: data.answer,
+            senderId: socket.id
+        });
+    });
+
+    socket.on('webrtc_ice_candidate', (data) => {
+        io.to(data.targetId).emit('webrtc_ice_candidate', {
+            candidate: data.candidate,
+            senderId: socket.id
+        });
+    });
+    // --------------------------------
+
     socket.on('disconnect', () => {
         console.log('user disconnected: ' + socket.id);
 

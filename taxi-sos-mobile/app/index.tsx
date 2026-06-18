@@ -18,6 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import { useWebRTC } from './useWebRTC';
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 const originalConsoleError = console.error;
@@ -190,6 +191,8 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [inputText, setInputText] = useState("");
 
+  const { localStream, isMicMuted, toggleMic } = useWebRTC(socket, activeSOSRoom);
+
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackProgress, setPlaybackProgress] = useState<{ [id: string]: number }>({});
   const historySoundRef = useRef<Audio.Sound | null>(null);
@@ -314,6 +317,12 @@ export default function App() {
     setPlayingAudioId(msg.id);
 
     try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+        playThroughEarpieceAndroid: false
+      });
       const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
       const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
       await FileSystem.writeAsStringAsync(fileUri, pureBase64, { encoding: FileSystem.EncodingType.Base64 });
@@ -670,7 +679,7 @@ export default function App() {
         setIncomingSpeaker(speakerName);
 
         await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
+          allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
           staysActiveInBackground: true,
           playThroughEarpieceAndroid: false
@@ -810,6 +819,7 @@ export default function App() {
     setLogs(prev => [{ id: Math.random().toString(), msg }, ...prev].slice(0, 3));
   };
 
+  /* -- ESKİ EXPO-AV KAYIT KODLARI --
   const startRecording = async () => {
     try {
       if (recordingRef.current) return;
@@ -852,6 +862,13 @@ export default function App() {
     } catch (err) {
       console.log("Kayıt durdurulamadı", err);
     }
+  };
+  ----------------------------------*/
+
+  const handleMicToggle = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    toggleMic();
+    addLog(isMicMuted ? "🎙️ Mikrofon AÇILDI." : "🔇 Mikrofon KAPATILDI.");
   };
 
   // --- RENDERING VIEWS ---
@@ -1049,6 +1066,16 @@ export default function App() {
             </View>
           ) : (
             <>
+              {activeSOSRoom && (
+                <TouchableOpacity 
+                  style={[styles.micButton, !isMicMuted && styles.micButtonRecording]}
+                  onPress={handleMicToggle}
+                >
+                  <MaterialIcons name={isMicMuted ? "mic-off" : "mic"} size={36} color="white" />
+                  <Text style={styles.micText}>{isMicMuted ? "MİKROFON AÇ" : "MİKROFON AÇIK"}</Text>
+                </TouchableOpacity>
+              )}
+              {/* -- ESKİ BAS KONUŞ BUTONU --
               <Text style={styles.pttStatusText}>🔴 Telsiz Bağlantısı Aktif</Text>
               <TouchableOpacity
                 style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, isRecording && styles.pttButtonRecording]}
@@ -1058,6 +1085,7 @@ export default function App() {
               >
                 <MaterialIcons name={isRecording ? "settings-voice" : "mic"} size={64} color="white" />
               </TouchableOpacity>
+              -------------------------------- */}
             </>
           )}
         </View>

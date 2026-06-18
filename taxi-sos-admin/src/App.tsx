@@ -3,7 +3,8 @@ import { io, Socket } from 'socket.io-client';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { LogOut, AlertTriangle, Users, Map as MapIcon, Car } from 'lucide-react';
+import { LogOut, AlertTriangle, Users, Map as MapIcon, Car, Archive as ArchiveIcon } from 'lucide-react';
+import Archive from './Archive';
 
 // Custom Map Markers
 const createCustomIcon = (color: string, isSOS: boolean = false) => {
@@ -45,8 +46,6 @@ type User = {
   lon: number;
   activeRoom: string | null;
 };
-
-import Archive from './Archive';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);

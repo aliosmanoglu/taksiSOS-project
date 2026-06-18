@@ -2,7 +2,7 @@
   "expo": {
     "name": "taxi-sos-mobile",
     "slug": "taxi-sos-mobile",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "scheme": "taxisosmobile",
@@ -12,7 +12,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.alihaydar.taksisos",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Bu uygulama acil durumlarda (SOS) veya canlı görüşmelerde kullanılmak üzere kameraya erişim gerektirebilir.",
+        "NSMicrophoneUsageDescription": "Bu uygulama acil durumlarda (SOS) telsiz bağlantısı ile sesinizi diğer şoförlere iletmek için mikrofonunuza erişim gerektirir."
       }
     },
     "android": {
