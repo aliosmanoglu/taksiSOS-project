@@ -94,7 +94,7 @@ async function registerForPushNotificationsAsync() {
 
 export default function App() {
   const lastNotificationResponse = Notifications.useLastNotificationResponse();
-  
+
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -128,7 +128,7 @@ export default function App() {
       const roomName = lastNotificationResponse.notification.request.content.data.roomName;
       setActiveSOSRoom(roomName);
       setPageMode('room');
-      
+
       if (socket) {
         socket.emit('join_sos_room', roomName);
       }
@@ -137,9 +137,9 @@ export default function App() {
 
   useEffect(() => {
     if (activeSOSRoom) {
-      AsyncStorage.setItem('activeSOSRoom', activeSOSRoom).catch(() => {});
+      AsyncStorage.setItem('activeSOSRoom', activeSOSRoom).catch(() => { });
     } else {
-      AsyncStorage.removeItem('activeSOSRoom').catch(() => {});
+      AsyncStorage.removeItem('activeSOSRoom').catch(() => { });
     }
   }, [activeSOSRoom]);
 
@@ -148,11 +148,11 @@ export default function App() {
   const splashFormOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    SplashScreen.preventAutoHideAsync().catch(() => {});
-    
+    SplashScreen.preventAutoHideAsync().catch(() => { });
+
     setTimeout(() => {
-      SplashScreen.hideAsync().catch(() => {});
-      
+      SplashScreen.hideAsync().catch(() => { });
+
       Animated.parallel([
         Animated.timing(splashLogoTranslateY, {
           toValue: 0,
@@ -171,7 +171,7 @@ export default function App() {
           useNativeDriver: true,
         })
       ]).start();
-    }, 1500); 
+    }, 1500);
   }, []);
 
   const [roomUsers, setRoomUsers] = useState<any[]>([]); // Haritada göstermek için diğer kişilerin konumu.
@@ -191,7 +191,21 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [inputText, setInputText] = useState("");
 
-  const { localStream, isMicMuted, toggleMic } = useWebRTC(socket, activeSOSRoom);
+  const { localStream, isMicMuted, setMicMuted, connectToNewUser } = useWebRTC(socket, activeSOSRoom);
+  const knownUsersRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!socket || !activeSOSRoom) return;
+    const currentRoomUsers = roomUsers.filter(u => u.activeRoom === activeSOSRoom && u.id !== socket.id);
+    currentRoomUsers.forEach(u => {
+      if (!knownUsersRef.current.has(u.id)) {
+        knownUsersRef.current.add(u.id);
+        if (socket.id > u.id) {
+          connectToNewUser(u.id);
+        }
+      }
+    });
+  }, [roomUsers, activeSOSRoom, socket, connectToNewUser]);
 
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackProgress, setPlaybackProgress] = useState<{ [id: string]: number }>({});
@@ -429,7 +443,7 @@ export default function App() {
         try {
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status !== 'granted') {
-             return;
+            return;
           }
 
           locationSubscription = await Location.watchPositionAsync(
@@ -511,7 +525,7 @@ export default function App() {
     try {
       // 1. Konum izinlerini iste
       const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
-      
+
       // 2. Ses kayıt izinlerini iste
       await Audio.requestPermissionsAsync();
 
@@ -578,9 +592,9 @@ export default function App() {
       hasConnected = true;
       setIsConnected(true);
       setIsConnecting(false);
-      
+
       let pushToken = await registerForPushNotificationsAsync();
-      
+
       newSocket.emit('connect_sos', {
         name: name,
         plate: plate,
@@ -592,9 +606,9 @@ export default function App() {
 
       AsyncStorage.getItem('activeSOSRoom').then(storedRoom => {
         if (storedRoom) {
-           newSocket.emit('join_sos_room', storedRoom);
+          newSocket.emit('join_sos_room', storedRoom);
         }
-      }).catch(()=>{});
+      }).catch(() => { });
       addLog(`✅ Bağlanıldı: ${name}`);
 
       // Kimlik bilgilerini yerel olarak kaydet
@@ -607,30 +621,30 @@ export default function App() {
 
     newSocket.on('all_users_update', (usersData: any[]) => {
       setRoomUsers(usersData);
-      
+
       // Aktif SOS odalarını bul ve "Tekrar Katıl" butonunun çıkması için bildirimlere ekle
       const activeSOS = usersData.filter(u => u.activeRoom && u.activeRoom.startsWith('sos_room_'));
       setSosNotifications(prev => {
-         let newNotifs = [...prev];
-         activeSOS.forEach(sosUser => {
-             const roomName = sosUser.activeRoom;
-             // Eğer bu odanın bildirimi zaten varsa veya kendi odamızsa ekleme
-             if (!newNotifs.find(n => n.roomName === roomName) && roomName !== "sos_room_" + phone) {
-                 const latDiff = currentLat - sosUser.lat;
-                 const lonDiff = currentLon - sosUser.lon;
-                 // Basit kuş uçuşu mesafe formülü
-                 const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111; 
-                 
-                 newNotifs.push({
-                     roomName: roomName,
-                     lat: sosUser.lat,
-                     lon: sosUser.lon,
-                     distance: distance,
-                     from: sosUser.name
-                 });
-             }
-         });
-         return newNotifs;
+        let newNotifs = [...prev];
+        activeSOS.forEach(sosUser => {
+          const roomName = sosUser.activeRoom;
+          // Eğer bu odanın bildirimi zaten varsa veya kendi odamızsa ekleme
+          if (!newNotifs.find(n => n.roomName === roomName) && roomName !== "sos_room_" + phone) {
+            const latDiff = currentLat - sosUser.lat;
+            const lonDiff = currentLon - sosUser.lon;
+            // Basit kuş uçuşu mesafe formülü
+            const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111;
+
+            newNotifs.push({
+              roomName: roomName,
+              lat: sosUser.lat,
+              lon: sosUser.lon,
+              distance: distance,
+              from: sosUser.name
+            });
+          }
+        });
+        return newNotifs;
       });
     });
 
@@ -737,6 +751,10 @@ export default function App() {
       });
     });
 
+    newSocket.on('user_speaking', (data: any) => {
+      setIncomingSpeaker(data.isSpeaking ? data.senderName : null);
+    });
+
     newSocket.on('disconnect', () => {
       setIsConnected(false);
       addLog("❌ Bağlantı koptu.");
@@ -777,7 +795,7 @@ export default function App() {
 
     try {
       await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, serverIp }));
-    } catch (err) {}
+    } catch (err) { }
 
     if (socket) {
       socket.emit('update_profile', { name, plate, phone });
@@ -865,10 +883,25 @@ export default function App() {
   };
   ----------------------------------*/
 
-  const handleMicToggle = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    toggleMic();
-    addLog(isMicMuted ? "🎙️ Mikrofon AÇILDI." : "🔇 Mikrofon KAPATILDI.");
+  const handleBlockedPtt = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+  };
+
+  const startPtt = () => {
+    if (incomingSpeaker) {
+      handleBlockedPtt();
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setMicMuted(false);
+    socket?.emit('is_speaking', { room: activeSOSRoom, isSpeaking: true });
+    addLog("🎙️ Mikrofon AÇILDI.");
+  };
+
+  const stopPtt = () => {
+    setMicMuted(true);
+    socket?.emit('is_speaking', { room: activeSOSRoom, isSpeaking: false });
+    addLog("🔇 Mikrofon KAPATILDI.");
   };
 
   // --- RENDERING VIEWS ---
@@ -876,23 +909,23 @@ export default function App() {
   if (!isConnected) {
     if (isCheckingAuth || (isConnecting && isAutoLoginTriggered)) {
       return (
-        <KeyboardAvoidingView 
-          style={[styles.container, { backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }]} 
+        <KeyboardAvoidingView
+          style={[styles.container, { backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }]}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={[styles.loginOverlay, { backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }]}>
-            <Animated.Image 
-              source={require('../assets/images/logo.png')} 
-              style={{ 
-                width: 120, 
-                height: 120, 
-                alignSelf: 'center', 
+            <Animated.Image
+              source={require('../assets/images/logo.png')}
+              style={{
+                width: 120,
+                height: 120,
+                alignSelf: 'center',
                 borderRadius: 25,
                 transform: [
                   { translateY: splashLogoTranslateY },
                   { scale: splashLogoScale }
                 ]
-              }} 
+              }}
             />
             <Animated.View style={{ opacity: splashFormOpacity, alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#ffffff" style={{ marginTop: 30 }} />
@@ -904,47 +937,47 @@ export default function App() {
     }
 
     return (
-      <KeyboardAvoidingView 
-        style={[styles.container, { backgroundColor: '#000000' }]} 
+      <KeyboardAvoidingView
+        style={[styles.container, { backgroundColor: '#000000' }]}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }} keyboardShouldPersistTaps="handled" style={{ width: '100%' }}>
           <View style={[styles.loginOverlay, { backgroundColor: '#000000' }]}>
             <View style={[styles.loginBox, { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0 }]}>
-            <Animated.Image 
-              source={require('../assets/images/logo.png')} 
-              style={{ 
-                width: 120, 
-                height: 120, 
-                alignSelf: 'center', 
-                marginBottom: 15, 
-                borderRadius: 25,
-                transform: [
-                  { translateY: splashLogoTranslateY },
-                  { scale: splashLogoScale }
-                ]
-              }} 
-            />
-            
-            <Animated.View style={{ opacity: splashFormOpacity }}>
-              <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
-              <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
-              <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
+              <Animated.Image
+                source={require('../assets/images/logo.png')}
+                style={{
+                  width: 120,
+                  height: 120,
+                  alignSelf: 'center',
+                  marginBottom: 15,
+                  borderRadius: 25,
+                  transform: [
+                    { translateY: splashLogoTranslateY },
+                    { scale: splashLogoScale }
+                  ]
+                }}
+              />
 
-              <TouchableOpacity 
-                style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} 
-                onPress={handleConnect}
-                disabled={isConnecting}
-              >
-                {isConnecting ? (
-                  <ActivityIndicator color="#ffffff" />
-                ) : (
-                  <Text style={styles.connectButtonText}>Giriş Yap</Text>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
+              <Animated.View style={{ opacity: splashFormOpacity }}>
+                <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
+                <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
+                <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
+
+                <TouchableOpacity
+                  style={[styles.connectButton, isConnecting && { opacity: 0.7 }]}
+                  onPress={handleConnect}
+                  disabled={isConnecting}
+                >
+                  {isConnecting ? (
+                    <ActivityIndicator color="#ffffff" />
+                  ) : (
+                    <Text style={styles.connectButtonText}>Giriş Yap</Text>
+                  )}
+                </TouchableOpacity>
+              </Animated.View>
+            </View>
           </View>
-        </View>
         </ScrollView>
       </KeyboardAvoidingView>
     );
@@ -1059,88 +1092,72 @@ export default function App() {
         </View>
 
         <View style={styles.pttBox}>
-          {incomingSpeaker ? (
-            <View style={[styles.pttButton, { backgroundColor: '#28a745' }]}>
-              <Text style={styles.pttButtonText}>🔊 {incomingSpeaker.toUpperCase()} KONUŞUYOR...</Text>
-              <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 12, marginTop: 5 }}>(Konuşmak için basılı tutun)</Text>
-            </View>
-          ) : (
-            <>
-              {activeSOSRoom && (
-                <TouchableOpacity 
-                  style={[styles.micButton, !isMicMuted && styles.micButtonRecording]}
-                  onPress={handleMicToggle}
-                >
-                  <MaterialIcons name={isMicMuted ? "mic-off" : "mic"} size={36} color="white" />
-                  <Text style={styles.micText}>{isMicMuted ? "MİKROFON AÇ" : "MİKROFON AÇIK"}</Text>
-                </TouchableOpacity>
-              )}
-              {/* -- ESKİ BAS KONUŞ BUTONU --
-              <Text style={styles.pttStatusText}>🔴 Telsiz Bağlantısı Aktif</Text>
-              <TouchableOpacity
-                style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, isRecording && styles.pttButtonRecording]}
-                onPressIn={startRecording}
-                onPressOut={stopRecording}
-                activeOpacity={0.9}
-              >
-                <MaterialIcons name={isRecording ? "settings-voice" : "mic"} size={64} color="white" />
-              </TouchableOpacity>
-              -------------------------------- */}
-            </>
+          {activeSOSRoom && (
+            <TouchableOpacity
+              style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, !isMicMuted && styles.pttButtonRecording]}
+              onPressIn={incomingSpeaker ? handleBlockedPtt : startPtt}
+              onPressOut={incomingSpeaker ? undefined : stopPtt}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="mic" size={64} color="white" />
+            </TouchableOpacity>
           )}
         </View>
 
         {/* SOHBET MODALI */}
-        <Modal visible={showChat} animationType="slide" transparent={true}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.chatModalContainer}>
-            <View style={styles.chatBox}>
-              <View style={styles.chatHeader}>
-                <Text style={styles.chatHeaderTitle}>Acil Durum Sohbeti</Text>
-                <TouchableOpacity onPress={() => setShowChat(false)}>
-                  <Text style={styles.chatCloseText}>Kapat</Text>
-                </TouchableOpacity>
-              </View>
-              <FlatList
-                data={chatMessages}
-                keyExtractor={item => item.id}
-                contentContainerStyle={{ padding: 10 }}
-                renderItem={({ item }) => {
-                  const isMe = socket && item.senderId === socket.id;
-                  return (
-                    <View style={[styles.chatBubble, isMe ? styles.chatBubbleMe : styles.chatBubbleOther]}>
-                      <Text style={styles.chatSenderName}>{item.senderName}</Text>
-                      {item.type === 'text' ? (
-                        <Text style={styles.chatContent}>{item.content}</Text>
-                      ) : (
-                        <View style={styles.audioMessageContainer}>
-                          <View style={styles.audioMessageRow}>
-                            <View style={styles.waveformBox}>
-                              {renderWaveform(item.id, playbackProgress[item.id] || 0)}
+        <Modal visible={showChat} animationType="slide" transparent={true} onRequestClose={() => setShowChat(false)}>
+          <View style={styles.chatModalContainer}>
+            <TouchableOpacity style={{ flex: 1, width: '100%' }} activeOpacity={1} onPress={() => setShowChat(false)} />
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
+              <View style={[styles.chatBox, { height: height * 0.6, width: '100%' }]}>
+                <View style={styles.chatHeader}>
+                  <Text style={styles.chatHeaderTitle}>Acil Durum Sohbeti</Text>
+                  <TouchableOpacity onPress={() => setShowChat(false)}>
+                    <Text style={styles.chatCloseText}>Kapat</Text>
+                  </TouchableOpacity>
+                </View>
+                <FlatList
+                  data={chatMessages}
+                  keyExtractor={item => item.id}
+                  contentContainerStyle={{ padding: 10 }}
+                  renderItem={({ item }) => {
+                    const isMe = socket && item.senderId === socket.id;
+                    return (
+                      <View style={[styles.chatBubble, isMe ? styles.chatBubbleMe : styles.chatBubbleOther]}>
+                        <Text style={styles.chatSenderName}>{item.senderName}</Text>
+                        {item.type === 'text' ? (
+                          <Text style={styles.chatContent}>{item.content}</Text>
+                        ) : (
+                          <View style={styles.audioMessageContainer}>
+                            <View style={styles.audioMessageRow}>
+                              <View style={styles.waveformBox}>
+                                {renderWaveform(item.id, playbackProgress[item.id] || 0)}
+                              </View>
+                              <TouchableOpacity style={[styles.chatPlayIconBtn, { marginLeft: 10, marginRight: 0 }]} onPress={() => handlePlayPause(item.id)}>
+                                <Text style={{ fontSize: 24 }}>{playingAudioId === item.id ? '⏹️' : '▶️'}</Text>
+                              </TouchableOpacity>
                             </View>
-                            <TouchableOpacity style={[styles.chatPlayIconBtn, { marginLeft: 10, marginRight: 0 }]} onPress={() => handlePlayPause(item.id)}>
-                              <Text style={{ fontSize: 24 }}>{playingAudioId === item.id ? '⏹️' : '▶️'}</Text>
-                            </TouchableOpacity>
+                            <Text style={styles.audioDurationText}>{formatDuration(item.duration)}</Text>
                           </View>
-                          <Text style={styles.audioDurationText}>{formatDuration(item.duration)}</Text>
-                        </View>
-                      )}
-                    </View>
-                  );
-                }}
-              />
-              <View style={styles.chatInputContainer}>
-                <TextInput
-                  style={styles.chatInput}
-                  placeholder="Mesaj yaz..."
-                  value={inputText}
-                  onChangeText={setInputText}
+                        )}
+                      </View>
+                    );
+                  }}
                 />
-                <TouchableOpacity style={styles.chatSendButton} onPress={sendTextMessage}>
-                  <Text style={styles.chatSendText}>Gönder</Text>
-                </TouchableOpacity>
+                <View style={styles.chatInputContainer}>
+                  <TextInput
+                    style={styles.chatInput}
+                    placeholder="Mesaj yaz..."
+                    value={inputText}
+                    onChangeText={setInputText}
+                  />
+                  <TouchableOpacity style={styles.chatSendButton} onPress={sendTextMessage}>
+                    <Text style={styles.chatSendText}>Gönder</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            </View>
-          </KeyboardAvoidingView>
+            </KeyboardAvoidingView>
+          </View>
         </Modal>
       </View>
     );
@@ -1172,7 +1189,7 @@ export default function App() {
               setPlate("");
               setPhone("");
               setIsAutoLoginTriggered(false);
-            } catch(e) {}
+            } catch (e) { }
           }}
         >
           <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>Çıkış Yap</Text>
@@ -1213,8 +1230,8 @@ export default function App() {
 
       {/* Sol Alt Profil Düzenle Butonu */}
       <View style={{ position: 'absolute', bottom: 40, left: 20, zIndex: 100 }}>
-        <TouchableOpacity 
-          style={{ backgroundColor: '#ff3b30', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5, flexDirection: 'row', alignItems: 'center' }} 
+        <TouchableOpacity
+          style={{ backgroundColor: '#ff3b30', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5, flexDirection: 'row', alignItems: 'center' }}
           onPress={() => setShowProfileModal(true)}
         >
           <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 14 }}>Profili Düzenle</Text>
@@ -1229,11 +1246,11 @@ export default function App() {
             <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
             <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
             <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34 T 1234)" autoCapitalize="characters" placeholderTextColor="#999" />
-            
+
             <TouchableOpacity style={styles.connectButton} onPress={handleUpdateProfile}>
               <Text style={styles.connectButtonText}>Güncelle</Text>
             </TouchableOpacity>
-            
+
             <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={() => setShowProfileModal(false)}>
               <Text style={{ color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }}>İptal</Text>
             </TouchableOpacity>
@@ -1288,7 +1305,7 @@ const styles = StyleSheet.create({
   pttBox: { height: 250, backgroundColor: '#111', borderTopWidth: 2, borderColor: '#222', alignItems: 'center', justifyContent: 'center', padding: 20 },
   pttStatusText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 18, marginBottom: 20 },
   pttButton: { width: '100%', height: 100, backgroundColor: '#333', borderRadius: 50, justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#555' },
-  pttButtonRecording: { backgroundColor: '#ff3b30', borderColor: '#ff0000' },
+  pttButtonRecording: { backgroundColor: '#81c784', borderColor: '#1b5e20' },
   pttButtonText: { color: 'white', fontSize: 24, fontWeight: 'bold' },
 
   sosMarkerContainer: { alignItems: 'center', justifyContent: 'center' },

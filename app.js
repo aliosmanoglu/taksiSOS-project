@@ -437,6 +437,15 @@ io.on('connection', (socket) => {
             senderId: socket.id
         });
     });
+
+    socket.on('is_speaking', (data) => {
+        let sender = users.find(u => u.id === socket.id);
+        let senderName = sender ? sender.name : "Bir Kullanıcı";
+        socket.to(data.room).emit('user_speaking', {
+            senderName: senderName,
+            isSpeaking: data.isSpeaking
+        });
+    });
     // --------------------------------
 
     socket.on('disconnect', () => {

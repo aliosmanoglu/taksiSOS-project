@@ -126,5 +126,15 @@ export const useWebRTC = (socket: Socket | null, activeSOSRoom: string | null) =
     }
   };
 
-  return { localStream, isMicMuted, toggleMic, peerConnections, connectToNewUser };
+  const setMicMuted = (muted: boolean) => {
+    if (localStream) {
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !muted;
+        setIsMicMuted(muted);
+      }
+    }
+  };
+
+  return { localStream, isMicMuted, toggleMic, setMicMuted, peerConnections, connectToNewUser };
 };
