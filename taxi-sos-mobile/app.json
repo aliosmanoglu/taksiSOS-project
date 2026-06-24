@@ -50,7 +50,14 @@
       "expo-font",
       "expo-video",
       "expo-notifications",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "@livekit/react-native-expo-plugin",
+        {
+          "cameraPermission": "Bu uygulama acil durumlarda (SOS) veya canlı görüşmelerde kullanılmak üzere kameraya erişim gerektirebilir.",
+          "microphonePermission": "Bu uygulama acil durumlarda (SOS) telsiz bağlantısı ile sesinizi diğer şoförlere iletmek için mikrofonunuza erişim gerektirir."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

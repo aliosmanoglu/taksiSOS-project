@@ -1,4 +1,6 @@
+require('dotenv').config();
 const express = require('express');
+const { AccessToken, WebhookReceiver } = require('livekit-server-sdk');
 const app = express();
 const http = require('http');
 const { Server } = require('socket.io');
@@ -46,6 +48,65 @@ app.get('/api/sos-archives', async (req, res) => {
         res.json(archives);
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// --- LiveKit Endpoints ---
+app.get('/api/livekit-token', (req, res) => {
+    const { roomName, participantName } = req.query;
+    if (!roomName || !participantName) {
+        return res.status(400).json({ error: 'roomName and participantName are required' });
+    }
+
+    const at = new AccessToken(
+        process.env.LIVEKIT_API_KEY,
+        process.env.LIVEKIT_API_SECRET,
+        { identity: participantName, name: participantName }
+    );
+    
+    at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
+    res.json({ token: at.toJwt() });
+});
+
+// LiveKit Egress Webhook Receiver (Recording completed)
+const webhookReceiver = new WebhookReceiver(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
+app.post('/api/livekit-webhook', async (req, res) => {
+    try {
+        const event = webhookReceiver.receive(req.body, req.headers.authorization);
+        console.log('LiveKit Webhook received:', event.event);
+
+        if (event.event === 'egress_ended') {
+            const egressInfo = event.egressInfo;
+            if (egressInfo && egressInfo.roomName) {
+                const roomName = egressInfo.roomName;
+                const fileResults = egressInfo.fileResults || [];
+                let fileUrl = '';
+                if (fileResults.length > 0) {
+                    fileUrl = fileResults[0].url; // e.g., S3 URL
+                }
+
+                // Append the recording URL to the SOS Archive in Firestore
+                // Note: The archive might have been saved already when the room ended,
+                // so we update the document matching the roomName.
+                if (fileUrl) {
+                    const archivesRef = db.collection('sos_archives');
+                    const snapshot = await archivesRef.where('id', '==', roomName).get();
+                    if (!snapshot.empty) {
+                        snapshot.forEach(doc => {
+                            archivesRef.doc(doc.id).update({
+                                recordingUrl: fileUrl,
+                                updatedAt: Date.now()
+                            });
+                        });
+                        console.log(`Updated archive ${roomName} with recording URL: ${fileUrl}`);
+                    }
+                }
+            }
+        }
+        res.status(200).send('OK');
+    } catch (error) {
+        console.error('Error handling webhook:', error);
+        res.status(400).send('Error');
     }
 });
 
@@ -416,34 +477,16 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- WebRTC Signaling Events ---
-    socket.on('webrtc_offer', (data) => {
-        io.to(data.targetId).emit('webrtc_offer', {
-            offer: data.offer,
-            senderId: socket.id
-        });
-    });
-
-    socket.on('webrtc_answer', (data) => {
-        io.to(data.targetId).emit('webrtc_answer', {
-            answer: data.answer,
-            senderId: socket.id
-        });
-    });
-
-    socket.on('webrtc_ice_candidate', (data) => {
-        io.to(data.targetId).emit('webrtc_ice_candidate', {
-            candidate: data.candidate,
-            senderId: socket.id
-        });
-    });
+    // WebRTC signaling is now handled by LiveKit Cloud.
 
     socket.on('is_speaking', (data) => {
         let sender = users.find(u => u.id === socket.id);
         let senderName = sender ? sender.name : "Bir Kullanıcı";
-        socket.to(data.room).emit('user_speaking', {
-            senderName: senderName,
-            isSpeaking: data.isSpeaking
+        let senderPlate = sender ? sender.plate : "";
+        socket.to(data.room).emit('user_speaking', { 
+            senderName: senderName, 
+            senderPlate: senderPlate,
+            isSpeaking: data.isSpeaking 
         });
     });
     // --------------------------------
