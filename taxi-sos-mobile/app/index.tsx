@@ -18,7 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { useWebRTC } from './useWebRTC';
+import { usePTT } from './_usePTT';
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 const originalConsoleError = console.error;
@@ -191,21 +191,9 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [inputText, setInputText] = useState("");
 
-  const { localStream, isMicMuted, setMicMuted, connectToNewUser } = useWebRTC(socket, activeSOSRoom);
-  const knownUsersRef = useRef<Set<string>>(new Set());
+  const { isMicMuted, isChannelLocked, lockedBy, requestPtt, stopPtt } = usePTT(socket, activeSOSRoom);
 
-  useEffect(() => {
-    if (!socket || !activeSOSRoom) return;
-    const currentRoomUsers = roomUsers.filter(u => u.activeRoom === activeSOSRoom && u.id !== socket.id);
-    currentRoomUsers.forEach(u => {
-      if (!knownUsersRef.current.has(u.id)) {
-        knownUsersRef.current.add(u.id);
-        if (socket.id > u.id) {
-          connectToNewUser(u.id);
-        }
-      }
-    });
-  }, [roomUsers, activeSOSRoom, socket, connectToNewUser]);
+  // PTT Mimarisine geçildiği için Mesh WebRTC (connectToNewUser) kaldırıldı.
 
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackProgress, setPlaybackProgress] = useState<{ [id: string]: number }>({});
@@ -685,6 +673,18 @@ export default function App() {
       }
     });
 
+    newSocket.on('receive_audio_chunk', async (payload: any) => {
+      try {
+        // Base64 chunklarını anlık olarak çalmalıyız. 
+        // Şimdilik expo-av ile tam chunk streaming desteklenmediğinden 
+        // gelen her parçayı çalmaya çalışacak basit bir yaklaşım:
+        const dataUrl = typeof payload === 'string' ? payload : payload.audio;
+        // İleride buraya react-native-live-audio-stream oynatıcısı eklenebilir.
+      } catch (e) {
+        console.log("Chunk çalınamadı:", e);
+      }
+    });
+
     newSocket.on('play_voice', async (payload: any) => {
       try {
         const dataUrl = typeof payload === 'string' ? payload : payload.audio;
@@ -887,21 +887,19 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
   };
 
-  const startPtt = () => {
-    if (incomingSpeaker) {
+  const handleStartPtt = () => {
+    if (isChannelLocked || incomingSpeaker) {
       handleBlockedPtt();
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    setMicMuted(false);
-    socket?.emit('is_speaking', { room: activeSOSRoom, isSpeaking: true });
-    addLog("🎙️ Mikrofon AÇILDI.");
+    requestPtt();
+    addLog("🎙️ Konuşma isteği gönderildi.");
   };
 
-  const stopPtt = () => {
-    setMicMuted(true);
-    socket?.emit('is_speaking', { room: activeSOSRoom, isSpeaking: false });
-    addLog("🔇 Mikrofon KAPATILDI.");
+  const handleStopPtt = () => {
+    stopPtt();
+    addLog("🔇 Ses gönderimi bitti.");
   };
 
   // --- RENDERING VIEWS ---
@@ -1093,14 +1091,19 @@ export default function App() {
 
         <View style={styles.pttBox}>
           {activeSOSRoom && (
-            <TouchableOpacity
-              style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, !isMicMuted && styles.pttButtonRecording]}
-              onPressIn={incomingSpeaker ? handleBlockedPtt : startPtt}
-              onPressOut={incomingSpeaker ? undefined : stopPtt}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="mic" size={64} color="white" />
-            </TouchableOpacity>
+            <>
+              {isChannelLocked && lockedBy && (
+                <Text style={styles.pttStatusText}>🔒 {lockedBy} konuşuyor...</Text>
+              )}
+              <TouchableOpacity
+                style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, !isMicMuted && styles.pttButtonRecording, isChannelLocked && styles.pttButtonLocked]}
+                onPressIn={handleStartPtt}
+                onPressOut={handleStopPtt}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="mic" size={64} color={isChannelLocked ? "#888" : "white"} />
+              </TouchableOpacity>
+            </>
           )}
         </View>
 

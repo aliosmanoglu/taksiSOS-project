@@ -2,7 +2,7 @@
   "expo": {
     "name": "taxi-sos-mobile",
     "slug": "taxi-sos-mobile",
-    "version": "1.0.4",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "scheme": "taxisosmobile",
@@ -59,7 +59,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "0c61188a-f747-4076-a7a2-d67c8be585cd"
+        "projectId": "1688ba30-151b-412e-8a35-b8345d711825"
       }
     }
   }

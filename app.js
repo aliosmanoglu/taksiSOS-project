@@ -5,8 +5,17 @@ const { Server } = require('socket.io');
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { getFirestore } = require('firebase-admin/firestore');
+const { getStorage } = require('firebase-admin/storage');
 const cors = require('cors');
 const { Expo } = require('expo-server-sdk');
+const fs = require('fs');
+const path = require('path');
+
+// Geçici ses dosyaları için klasör oluştur
+const tempAudioDir = path.join(__dirname, 'temp_audio');
+if (!fs.existsSync(tempAudioDir)) {
+    fs.mkdirSync(tempAudioDir, { recursive: true });
+}
 
 // Initialize Expo Push Client
 const expo = new Expo();
@@ -22,7 +31,8 @@ try {
         serviceAccount = require('./firebase-service-account.json');
     }
     initializeApp({
-        credential: cert(serviceAccount)
+        credential: cert(serviceAccount),
+        storageBucket: 'taksi-sos.appspot.com'
     });
 } catch (error) {
     console.error("Firebase başlatılırken bir hata oluştu. Kimlik bilgileri eksik olabilir:", error);
@@ -32,6 +42,11 @@ const port = process.env.PORT || 5000;
 
 const server = http.createServer(app);
 const db = getFirestore();
+const bucket = getStorage().bucket();
+
+// Yeni PTT mimarisi için kilit ve akış durumları
+let channelStates = {}; // Örn: { "room_id": { isChannelActive: true, activeSpeakerId: "socket_id", tempFileName: "..." } }
+let writeStreams = {}; // { "socket_id": WriteStream }
 
 app.use(cors());
 app.use(express.json());
@@ -416,35 +431,137 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- WebRTC Signaling Events ---
-    socket.on('webrtc_offer', (data) => {
-        io.to(data.targetId).emit('webrtc_offer', {
-            offer: data.offer,
-            senderId: socket.id
-        });
+    // --- NEW PTT EVENT HANDLERS ---
+    socket.on('request_talk', (data) => {
+        let room = data.room;
+        if (!channelStates[room]) {
+            channelStates[room] = { isChannelActive: false, activeSpeakerId: null, tempFileName: null };
+        }
+
+        if (channelStates[room].isChannelActive) {
+            // Kanal meşgul
+            socket.emit('talk_rejected', { reason: 'Channel is currently locked by another user.' });
+        } else {
+            // İzin ver
+            channelStates[room].isChannelActive = true;
+            channelStates[room].activeSpeakerId = socket.id;
+
+            // Temp file oluştur
+            const tempFileName = `temp_${room}_${socket.id}_${Date.now()}.raw`;
+            const tempFilePath = path.join(tempAudioDir, tempFileName);
+            channelStates[room].tempFileName = tempFilePath;
+            
+            writeStreams[socket.id] = fs.createWriteStream(tempFilePath, { flags: 'a' });
+
+            // Onay gönder
+            socket.emit('talk_granted');
+
+            // Diğerlerine kanalın kilitlendiğini duyur
+            let sender = users.find(u => u.id === socket.id);
+            socket.to(room).emit('channel_locked', { lockedBy: sender ? sender.name : 'Bir Kullanıcı' });
+        }
     });
 
-    socket.on('webrtc_answer', (data) => {
-        io.to(data.targetId).emit('webrtc_answer', {
-            answer: data.answer,
-            senderId: socket.id
-        });
+    socket.on('audio_chunk', (data) => {
+        let room = data.room;
+        let chunkBase64 = data.audio; // Gelen ham base64
+
+        if (channelStates[room] && channelStates[room].activeSpeakerId === socket.id) {
+            // Base64 buffer'a çevirip diske yaz
+            if (writeStreams[socket.id]) {
+                const buffer = Buffer.from(chunkBase64, 'base64');
+                writeStreams[socket.id].write(buffer);
+            }
+
+            // Diğer dinleyicilere stream et
+            socket.to(room).emit('receive_audio_chunk', { audio: chunkBase64, senderId: socket.id });
+        }
     });
 
-    socket.on('webrtc_ice_candidate', (data) => {
-        io.to(data.targetId).emit('webrtc_ice_candidate', {
-            candidate: data.candidate,
-            senderId: socket.id
-        });
-    });
+    socket.on('stop_talk', async (data) => {
+        let room = data.room;
+        if (channelStates[room] && channelStates[room].activeSpeakerId === socket.id) {
+            // Yazma işlemini bitir
+            if (writeStreams[socket.id]) {
+                writeStreams[socket.id].end();
+                delete writeStreams[socket.id];
+            }
 
-    socket.on('is_speaking', (data) => {
-        let sender = users.find(u => u.id === socket.id);
-        let senderName = sender ? sender.name : "Bir Kullanıcı";
-        socket.to(data.room).emit('user_speaking', {
-            senderName: senderName,
-            isSpeaking: data.isSpeaking
-        });
+            const tempFilePath = channelStates[room].tempFileName;
+            const sender = users.find(u => u.id === socket.id);
+            const senderName = sender ? sender.name : "Bir Kullanıcı";
+            const msgId = Date.now().toString();
+
+            // Kanalı serbest bırak
+            channelStates[room].isChannelActive = false;
+            channelStates[room].activeSpeakerId = null;
+            channelStates[room].tempFileName = null;
+            socket.to(room).emit('channel_released');
+
+            // Storage Upload
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+                try {
+                    const destination = `voice_messages/${room}/${msgId}.raw`;
+                    await bucket.upload(tempFilePath, {
+                        destination: destination,
+                        metadata: {
+                            contentType: 'audio/raw'
+                        }
+                    });
+
+                    // Dosyayı public okumaya açıyoruz (veya signed url alabilirsiniz)
+                    const file = bucket.file(destination);
+                    await file.makePublic();
+                    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${destination}`;
+
+                    // Firestore'a kaydet
+                    const docData = {
+                        id: msgId,
+                        channel_id: room,
+                        sender_id: socket.id,
+                        sender_name: senderName,
+                        storage_url: publicUrl,
+                        duration_ms: data.duration || 0,
+                        created_at: new Date()
+                    };
+                    await db.collection('voice_messages').doc(msgId).set(docData);
+
+                    // Arşive de ekleyelim
+                    if (activeArchives[room]) {
+                        activeArchives[room].messages.push({
+                            id: msgId,
+                            type: 'audio',
+                            content: publicUrl, // artık devasa base64 değil URL gönderiyoruz
+                            senderName: senderName,
+                            senderId: socket.id,
+                            timestamp: Date.now(),
+                            duration: data.duration || 0
+                        });
+                    }
+
+                    // Dinleyicilere mesajın tamamlandığını ve linkini gönder
+                    io.in(room).emit('chat_message', {
+                        id: msgId,
+                        type: 'audio',
+                        content: publicUrl, // Base64 yerine url gidiyor
+                        senderName: senderName,
+                        senderId: socket.id,
+                        timestamp: Date.now(),
+                        duration: data.duration || 0
+                    });
+
+                } catch (error) {
+                    console.error("Storage upload hatası:", error);
+                } finally {
+                    // ÇÖP TOPLAMA (GARBAGE COLLECTION) - Render diski dolmaması için zorunlu!
+                    if (fs.existsSync(tempFilePath)) {
+                        fs.unlink(tempFilePath, (err) => {
+                            if (err) console.error("Temp dosya silinirken hata:", err);
+                        });
+                    }
+                }
+            }
+        }
     });
     // --------------------------------
 
