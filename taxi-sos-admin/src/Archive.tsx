@@ -235,18 +235,6 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                     />
                                 </div>
                             )}
-                            {selectedArchive.recordingUrl && (
-                                <div style={{ marginTop: '20px', padding: '15px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', border: '1px solid rgba(88,166,255,0.2)' }}>
-                                    <h3 style={{ fontSize: '14px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                        <Play size={14} /> Tüm Oda Ses Kaydı (LiveKit)
-                                    </h3>
-                                    <audio 
-                                        controls 
-                                        src={selectedArchive.recordingUrl} 
-                                        style={{ width: '100%', outline: 'none' }} 
-                                    />
-                                </div>
-                            )}
                         </div>
 
                         <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>

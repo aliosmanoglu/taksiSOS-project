@@ -18,7 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { useLiveKit } from './useLiveKit';
+import { useWebRTC } from './useWebRTC';
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 const originalConsoleError = console.error;
@@ -180,7 +180,7 @@ export default function App() {
 
   const [logs, setLogs] = useState<{ id: string, msg: string }[]>([]);
   const [isRecording, setIsRecording] = useState(false);
-  const [incomingSpeaker, setIncomingSpeaker] = useState<{name: string, plate: string} | null>(null);
+  const [incomingSpeaker, setIncomingSpeaker] = useState<string | null>(null);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const recordingRef = useRef<Audio.Recording | null>(null);
@@ -190,39 +190,22 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showChat, setShowChat] = useState(false);
   const [inputText, setInputText] = useState("");
-  const flatListRef = useRef<FlatList>(null);
-  const [isScrolledUp, setIsScrolledUp] = useState(false);
-  const [hasUnread, setHasUnread] = useState(false);
 
-  const [liveKitToken, setLiveKitToken] = useState<string | null>(null);
-  const [liveKitUrl, setLiveKitUrl] = useState<string | null>(null);
-  const { room, isMicMuted, toggleMic } = useLiveKit(liveKitUrl, liveKitToken);
-  // Fetch LiveKit token when activeSOSRoom is set
+  const { localStream, isMicMuted, setMicMuted, connectToNewUser } = useWebRTC(socket, activeSOSRoom);
+  const knownUsersRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
-    if (!activeSOSRoom || !name) {
-      setLiveKitToken(null);
-      setLiveKitUrl(null);
-      return;
-    }
-
-    const fetchToken = async () => {
-      try {
-        const res = await fetch(`${SERVER_URL}/api/livekit-token?roomName=${activeSOSRoom}&participantName=${encodeURIComponent(name)}`);
-        const data = await res.json();
-        if (data.token) {
-          setLiveKitToken(data.token);
-          // TODO: Use actual LiveKit Cloud URL, or pass from backend
-          // For now, hardcode or fetch. Let's ask user to set it or we can proxy it.
-          // Let's hardcode the user's LiveKit URL for now
-          setLiveKitUrl('wss://taxi-sos-25vv246z.livekit.cloud');
+    if (!socket || !activeSOSRoom) return;
+    const currentRoomUsers = roomUsers.filter(u => u.activeRoom === activeSOSRoom && u.id !== socket.id);
+    currentRoomUsers.forEach(u => {
+      if (!knownUsersRef.current.has(u.id)) {
+        knownUsersRef.current.add(u.id);
+        if (socket.id > u.id) {
+          connectToNewUser(u.id);
         }
-      } catch (err) {
-        console.error("Failed to fetch LiveKit token", err);
       }
-    };
-
-    fetchToken();
-  }, [activeSOSRoom, name]);
+    });
+  }, [roomUsers, activeSOSRoom, socket, connectToNewUser]);
 
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackProgress, setPlaybackProgress] = useState<{ [id: string]: number }>({});
@@ -352,9 +335,7 @@ export default function App() {
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
         staysActiveInBackground: true,
-        playThroughEarpieceAndroid: false,
-        // @ts-ignore
-        ios: { category: Audio.IOSCategory.PLAY_AND_RECORD, categoryOptions: [Audio.IOSCategoryOptions.DEFAULT_TO_SPEAKER, Audio.IOSCategoryOptions.ALLOW_BLUETOOTH] }
+        playThroughEarpieceAndroid: false
       });
       const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
       const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
@@ -708,17 +689,14 @@ export default function App() {
       try {
         const dataUrl = typeof payload === 'string' ? payload : payload.audio;
         const speakerName = (typeof payload === 'object' && payload.senderName) ? payload.senderName : "BİRİSİ";
-        const speakerPlate = (typeof payload === 'object' && payload.senderPlate) ? payload.senderPlate : "";
 
-        setIncomingSpeaker({name: speakerName, plate: speakerPlate});
+        setIncomingSpeaker(speakerName);
 
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
           staysActiveInBackground: true,
-          playThroughEarpieceAndroid: false,
-          // @ts-ignore
-          ios: { category: Audio.IOSCategory.PLAY_AND_RECORD, categoryOptions: [Audio.IOSCategoryOptions.DEFAULT_TO_SPEAKER, Audio.IOSCategoryOptions.ALLOW_BLUETOOTH] }
+          playThroughEarpieceAndroid: false
         });
 
         const base64Data = dataUrl.includes('base64,') ? dataUrl.split('base64,')[1] : dataUrl;
@@ -774,7 +752,7 @@ export default function App() {
     });
 
     newSocket.on('user_speaking', (data: any) => {
-      setIncomingSpeaker(data.isSpeaking ? {name: data.senderName, plate: data.senderPlate || ""} : null);
+      setIncomingSpeaker(data.isSpeaking ? data.senderName : null);
     });
 
     newSocket.on('disconnect', () => {
@@ -909,28 +887,21 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
   };
 
-  const startPtt = async () => {
+  const startPtt = () => {
     if (incomingSpeaker) {
       handleBlockedPtt();
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    
-    // LiveKit Mikrofonu Aç
-    toggleMic(true);
-    
+    setMicMuted(false);
     socket?.emit('is_speaking', { room: activeSOSRoom, isSpeaking: true });
     addLog("🎙️ Mikrofon AÇILDI.");
-    setIsRecording(true);
   };
 
-  const stopPtt = async () => {
-    // LiveKit Mikrofonu Kapat
-    toggleMic(false);
-    
+  const stopPtt = () => {
+    setMicMuted(true);
     socket?.emit('is_speaking', { room: activeSOSRoom, isSpeaking: false });
     addLog("🔇 Mikrofon KAPATILDI.");
-    setIsRecording(false);
   };
 
   // --- RENDERING VIEWS ---
@@ -1122,21 +1093,14 @@ export default function App() {
 
         <View style={styles.pttBox}>
           {activeSOSRoom && (
-            <View>
-              <TouchableOpacity
-                style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, (!isMicMuted || incomingSpeaker) && styles.pttButtonRecording]}
-                onPressIn={incomingSpeaker ? handleBlockedPtt : startPtt}
-                onPressOut={incomingSpeaker ? undefined : stopPtt}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="mic" size={64} color="white" />
-              </TouchableOpacity>
-              {incomingSpeaker && (
-                <Text style={{ color: '#4CAF50', marginTop: 15, fontSize: 18, fontWeight: 'bold', textAlign: 'center' }}>
-                  🔊 {incomingSpeaker.name.toUpperCase()} ({incomingSpeaker.plate}) KONUŞUYOR...
-                </Text>
-              )}
-            </View>
+            <TouchableOpacity
+              style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, !isMicMuted && styles.pttButtonRecording]}
+              onPressIn={incomingSpeaker ? handleBlockedPtt : startPtt}
+              onPressOut={incomingSpeaker ? undefined : stopPtt}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="mic" size={64} color="white" />
+            </TouchableOpacity>
           )}
         </View>
 
@@ -1153,26 +1117,9 @@ export default function App() {
                   </TouchableOpacity>
                 </View>
                 <FlatList
-                  ref={flatListRef}
                   data={chatMessages}
                   keyExtractor={item => item.id}
-                  contentContainerStyle={{ padding: 10, paddingBottom: 60 }}
-                  onScroll={(e) => {
-                    const offsetY = e.nativeEvent.contentOffset.y;
-                    const contentHeight = e.nativeEvent.contentSize.height;
-                    const layoutHeight = e.nativeEvent.layoutMeasurement.height;
-                    const isBottom = offsetY + layoutHeight >= contentHeight - 50;
-                    setIsScrolledUp(!isBottom);
-                    if (isBottom) setHasUnread(false);
-                  }}
-                  scrollEventThrottle={16}
-                  onContentSizeChange={() => {
-                    if (!isScrolledUp) {
-                      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-                    } else {
-                      setHasUnread(true);
-                    }
-                  }}
+                  contentContainerStyle={{ padding: 10 }}
                   renderItem={({ item }) => {
                     const isMe = socket && item.senderId === socket.id;
                     return (
@@ -1197,21 +1144,6 @@ export default function App() {
                     );
                   }}
                 />
-                {isScrolledUp && (
-                  <TouchableOpacity
-                    style={{
-                      position: 'absolute', right: 20, bottom: 80, backgroundColor: '#333', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3, zIndex: 100
-                    }}
-                    onPress={() => {
-                      flatListRef.current?.scrollToEnd({ animated: true });
-                      setHasUnread(false);
-                      setIsScrolledUp(false);
-                    }}
-                  >
-                    <Text style={{ fontSize: 20 }}>⬇️</Text>
-                    {hasUnread && <View style={{ position: 'absolute', top: 0, right: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: 'red' }} />}
-                  </TouchableOpacity>
-                )}
                 <View style={styles.chatInputContainer}>
                   <TextInput
                     style={styles.chatInput}
