@@ -317,14 +317,14 @@ export default function App() {
     }
 
     await stopHistoryAudio();
-    
+
     if (incomingSoundRef.current) {
       try {
         await incomingSoundRef.current.stopAsync();
         await incomingSoundRef.current.unloadAsync();
         incomingSoundRef.current = null;
         setIncomingSpeaker(null);
-      } catch(e){}
+      } catch (e) { }
     }
 
     setPlayingAudioId(msg.id);
@@ -336,7 +336,7 @@ export default function App() {
         staysActiveInBackground: true,
         playThroughEarpieceAndroid: false
       });
-      
+
       let soundToPlay;
       if (msg.content.startsWith('http')) {
         const { sound } = await Audio.Sound.createAsync(
@@ -354,7 +354,7 @@ export default function App() {
         );
         soundToPlay = sound;
       }
-      
+
       historySoundRef.current = soundToPlay;
 
       soundToPlay.setOnPlaybackStatusUpdate((status: any) => {
@@ -737,14 +737,14 @@ export default function App() {
           if (status.isLoaded && status.didJustFinish) {
             setIncomingSpeaker(null);
             if (incomingSoundRef.current === soundToPlay) {
-                incomingSoundRef.current = null;
+              incomingSoundRef.current = null;
             }
             await soundToPlay.unloadAsync();
           }
         });
-        
+
         if (incomingSoundRef.current) {
-            try { await incomingSoundRef.current.stopAsync(); await incomingSoundRef.current.unloadAsync(); } catch(e){}
+          try { await incomingSoundRef.current.stopAsync(); await incomingSoundRef.current.unloadAsync(); } catch (e) { }
         }
         incomingSoundRef.current = soundToPlay;
         await soundToPlay.playAsync();
