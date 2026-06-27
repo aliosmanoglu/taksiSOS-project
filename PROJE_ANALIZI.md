@@ -56,12 +56,6 @@ Acil durum kayıtları, kullanıcı profilleri ve şikayet mekanizmaları için 
 *   **Repo:** [rnmapbox/maps](https://github.com/rnmapbox/maps)
 *   **Ne İşe Yarar:** Mapbox'ın açık kaynaklı React Native eklentisi. Acil yardım isteyene giden yolun (Routing/Navigation) turn-by-turn harita üzerinde çizilmesi, sokak görünümleri ve özel "karanlık acil durum" temaları yapmanızı sağlar.
 
-### 5. Anlık Telsiz (Walkie-Talkie) Deneyimi: LiveKit veya Mediasoup (WebRTC)
-Sesli mesajların inmesini beklemek acil bir durumda vakit kaybıdır.
-
-*   **Repo:** [livekit/client-sdk-react-native](https://github.com/livekit/client-sdk-react-native) veya [versatica/mediasoup](https://github.com/versatica/mediasoup)
-*   **Ne İşe Yarar:** WebRTC teknolojisi kullanarak "bas-konuş" telsiz sistemi veya anlık VoIP sesli aramalar yapmanızı olanak tanır. Gecikme (latency) 50-100 milisaniye civarındadır.
-
 ### 6. Gelişmiş JavaScript Konum Kütüphanesi: Turf.js
 Eğer uzaklık dışında coğrafi hesaplamalara ihtiyaç duyarsanız (örneğin kullanıcı belirli bir tehlikeli alan poligonunun içine girdi mi?).
 

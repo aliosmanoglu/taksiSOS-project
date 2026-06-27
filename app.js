@@ -32,7 +32,7 @@ try {
     }
     initializeApp({
         credential: cert(serviceAccount),
-        storageBucket: 'taksi-sos.appspot.com'
+        storageBucket: 'taksi-sos.firebasestorage.app'
     });
 } catch (error) {
     console.error("Firebase başlatılırken bir hata oluştu. Kimlik bilgileri eksik olabilir:", error);

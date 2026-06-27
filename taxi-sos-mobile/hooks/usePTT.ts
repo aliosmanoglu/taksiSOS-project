@@ -16,7 +16,8 @@ export const usePTT = (socket: Socket | null, activeSOSRoom: string | null) => {
       channels: 1,
       bitsPerSample: 16,
       audioSource: 1, // 1 for MIC
-      bufferSize: 4096
+      bufferSize: 4096,
+      wavFile: '' // TypeScript hatasını çözmek için boş eklendi
     };
 
     LiveAudioStream.init(options);

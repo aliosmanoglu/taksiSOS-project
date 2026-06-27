@@ -18,7 +18,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { usePTT } from './_usePTT';
+import { usePTT } from '../hooks/usePTT';
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 const originalConsoleError = console.error;
@@ -193,7 +193,6 @@ export default function App() {
 
   const { isMicMuted, isChannelLocked, lockedBy, requestPtt, stopPtt } = usePTT(socket, activeSOSRoom);
 
-  // PTT Mimarisine geçildiği için Mesh WebRTC (connectToNewUser) kaldırıldı.
 
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackProgress, setPlaybackProgress] = useState<{ [id: string]: number }>({});
@@ -1309,6 +1308,7 @@ const styles = StyleSheet.create({
   pttStatusText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 18, marginBottom: 20 },
   pttButton: { width: '100%', height: 100, backgroundColor: '#333', borderRadius: 50, justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#555' },
   pttButtonRecording: { backgroundColor: '#81c784', borderColor: '#1b5e20' },
+  pttButtonLocked: { backgroundColor: '#555', borderColor: '#333' },
   pttButtonText: { color: 'white', fontSize: 24, fontWeight: 'bold' },
 
   sosMarkerContainer: { alignItems: 'center', justifyContent: 'center' },
