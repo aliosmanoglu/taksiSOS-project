@@ -32,7 +32,7 @@ try {
     }
     initializeApp({
         credential: cert(serviceAccount),
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
     });
 } catch (error) {
     console.error("Firebase başlatılırken bir hata oluştu. Kimlik bilgileri eksik olabilir:", error);
@@ -450,7 +450,7 @@ io.on('connection', (socket) => {
             const tempFileName = `temp_${room}_${socket.id}_${Date.now()}.raw`;
             const tempFilePath = path.join(tempAudioDir, tempFileName);
             channelStates[room].tempFileName = tempFilePath;
-            
+
             writeStreams[socket.id] = fs.createWriteStream(tempFilePath, { flags: 'a' });
 
             // Onay gönder
