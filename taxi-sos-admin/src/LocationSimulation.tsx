@@ -94,7 +94,7 @@ export default function LocationSimulation({ history, messages = [], startTime, 
                     for (const msg of messages) {
                         if (msg.type === 'audio' && msg.timestamp >= prev && msg.timestamp < next) {
                             if (audioPlayerRef.current) {
-                                audioPlayerRef.current.src = `data:audio/mp4;base64,${msg.content}`;
+                                audioPlayerRef.current.src = msg.content;
                                 audioPlayerRef.current.playbackRate = speedMultiplier;
                                 audioPlayerRef.current.play().catch(e => console.log("Simülasyon ses oynatılamadı", e));
                             }
@@ -126,9 +126,10 @@ export default function LocationSimulation({ history, messages = [], startTime, 
     const sortedHistory = [...history].sort((a, b) => a.timestamp - b.timestamp);
     
     for (const update of sortedHistory) {
-        if (update.timestamp <= currentTime) {
+        if (update.timestamp <= currentTime || currentPositions.size === 0) {
             currentPositions.set(update.id, update);
-        } else {
+        }
+        if (update.timestamp > currentTime) {
             // Since it's sorted, we can stop early when we pass currentTime
             break;
         }

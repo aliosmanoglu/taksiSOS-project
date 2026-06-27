@@ -20,6 +20,25 @@ if (!fs.existsSync(tempAudioDir)) {
 // Initialize Expo Push Client
 const expo = new Expo();
 
+// Helper to generate a WAV header from raw PCM data
+function getWavHeader(dataLength, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + dataLength, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(channels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(sampleRate * channels * (bitsPerSample / 8), 28);
+    header.writeUInt16LE(channels * (bitsPerSample / 8), 32);
+    header.writeUInt16LE(bitsPerSample, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(dataLength, 40);
+    return header;
+}
+
 // Initialize Firebase Admin SDK
 let serviceAccount;
 try {
@@ -501,13 +520,27 @@ io.on('connection', (socket) => {
             // Storage Upload
             if (tempFilePath && fs.existsSync(tempFilePath)) {
                 try {
-                    const destination = `voice_messages/${room}/${msgId}.raw`;
-                    await bucket.upload(tempFilePath, {
+                    // .raw dosyasını oku ve .wav olarak kaydet
+                    const rawBuffer = fs.readFileSync(tempFilePath);
+                    const wavHeader = getWavHeader(rawBuffer.length, 16000, 1, 16);
+                    const wavBuffer = Buffer.concat([wavHeader, rawBuffer]);
+                    
+                    const wavFilePath = tempFilePath.replace('.raw', '.wav');
+                    fs.writeFileSync(wavFilePath, wavBuffer);
+
+                    const destination = `voice_messages/${room}/${msgId}.wav`;
+                    await bucket.upload(wavFilePath, {
                         destination: destination,
                         metadata: {
-                            contentType: 'audio/raw'
+                            contentType: 'audio/wav'
                         }
                     });
+
+                    // Temizlik işlemleri
+                    try {
+                        fs.unlinkSync(tempFilePath);
+                        fs.unlinkSync(wavFilePath);
+                    } catch (e) { console.error("Temp file silme hatası", e); }
 
                     // Dosyayı public okumaya açıyoruz (veya signed url alabilirsiniz)
                     const file = bucket.file(destination);

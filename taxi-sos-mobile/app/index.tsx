@@ -190,6 +190,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showChat, setShowChat] = useState(false);
   const [inputText, setInputText] = useState("");
+  const chatListRef = useRef<FlatList>(null);
 
   const { isMicMuted, isChannelLocked, lockedBy, requestPtt, stopPtt } = usePTT(socket, activeSOSRoom);
 
@@ -197,6 +198,7 @@ export default function App() {
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
   const [playbackProgress, setPlaybackProgress] = useState<{ [id: string]: number }>({});
   const historySoundRef = useRef<Audio.Sound | null>(null);
+  const incomingSoundRef = useRef<Audio.Sound | null>(null);
 
   const formatDuration = (millis?: number) => {
     if (!millis) return "0:00";
@@ -315,6 +317,16 @@ export default function App() {
     }
 
     await stopHistoryAudio();
+    
+    if (incomingSoundRef.current) {
+      try {
+        await incomingSoundRef.current.stopAsync();
+        await incomingSoundRef.current.unloadAsync();
+        incomingSoundRef.current = null;
+        setIncomingSpeaker(null);
+      } catch(e){}
+    }
+
     setPlayingAudioId(msg.id);
 
     try {
@@ -324,17 +336,28 @@ export default function App() {
         staysActiveInBackground: true,
         playThroughEarpieceAndroid: false
       });
-      const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
-      const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
-      await FileSystem.writeAsStringAsync(fileUri, pureBase64, { encoding: FileSystem.EncodingType.Base64 });
+      
+      let soundToPlay;
+      if (msg.content.startsWith('http')) {
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: msg.content },
+          { shouldPlay: true }
+        );
+        soundToPlay = sound;
+      } else {
+        const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
+        const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
+        await FileSystem.writeAsStringAsync(fileUri, pureBase64, { encoding: FileSystem.EncodingType.Base64 });
+        const { sound } = await Audio.Sound.createAsync(
+          { uri: fileUri },
+          { shouldPlay: true }
+        );
+        soundToPlay = sound;
+      }
+      
+      historySoundRef.current = soundToPlay;
 
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: fileUri },
-        { shouldPlay: true }
-      );
-      historySoundRef.current = sound;
-
-      sound.setOnPlaybackStatusUpdate((status: any) => {
+      soundToPlay.setOnPlaybackStatusUpdate((status: any) => {
         if (status.isLoaded) {
           const progress = status.durationMillis ? status.positionMillis / status.durationMillis : 0;
           setPlaybackProgress(prev => ({ ...prev, [msg.id]: progress }));
@@ -698,19 +721,33 @@ export default function App() {
           playThroughEarpieceAndroid: false
         });
 
-        const base64Data = dataUrl.includes('base64,') ? dataUrl.split('base64,')[1] : dataUrl;
-        const fileUri = FileSystem.documentDirectory + `incoming_voice_${Date.now()}.m4a`;
-        await FileSystem.writeAsStringAsync(fileUri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
+        let soundToPlay;
+        if (dataUrl.startsWith('http')) {
+          const { sound } = await Audio.Sound.createAsync({ uri: dataUrl });
+          soundToPlay = sound;
+        } else {
+          const base64Data = dataUrl.includes('base64,') ? dataUrl.split('base64,')[1] : dataUrl;
+          const fileUri = FileSystem.documentDirectory + `incoming_voice_${Date.now()}.m4a`;
+          await FileSystem.writeAsStringAsync(fileUri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
+          const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
+          soundToPlay = sound;
+        }
 
-        const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
-        sound.setOnPlaybackStatusUpdate(async (status) => {
+        soundToPlay.setOnPlaybackStatusUpdate(async (status) => {
           if (status.isLoaded && status.didJustFinish) {
             setIncomingSpeaker(null);
-            await sound.unloadAsync();
-            await FileSystem.deleteAsync(fileUri, { idempotent: true });
+            if (incomingSoundRef.current === soundToPlay) {
+                incomingSoundRef.current = null;
+            }
+            await soundToPlay.unloadAsync();
           }
         });
-        await sound.playAsync();
+        
+        if (incomingSoundRef.current) {
+            try { await incomingSoundRef.current.stopAsync(); await incomingSoundRef.current.unloadAsync(); } catch(e){}
+        }
+        incomingSoundRef.current = soundToPlay;
+        await soundToPlay.playAsync();
       } catch (e) {
         setIncomingSpeaker(null);
         console.log("Ses çalınamadı:", e);
@@ -1119,6 +1156,9 @@ export default function App() {
                   </TouchableOpacity>
                 </View>
                 <FlatList
+                  ref={chatListRef}
+                  onContentSizeChange={() => chatListRef.current?.scrollToEnd({ animated: true })}
+                  onLayout={() => chatListRef.current?.scrollToEnd({ animated: true })}
                   data={chatMessages}
                   keyExtractor={item => item.id}
                   contentContainerStyle={{ padding: 10 }}

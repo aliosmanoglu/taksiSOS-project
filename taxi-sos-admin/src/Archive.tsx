@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Archive as ArchiveIcon, Clock, User, Phone, Play, Pause, FileText, AlertCircle, Calendar, Users } from 'lucide-react';
 import LocationSimulation from './LocationSimulation';
 
-const CustomAudioPlayer = ({ base64Audio, duration }: { base64Audio: string, duration: number }) => {
+const CustomAudioPlayer = ({ audioUrl, duration }: { audioUrl: string, duration: number }) => {
     const audioRef = useRef<HTMLAudioElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -85,7 +85,7 @@ const CustomAudioPlayer = ({ base64Audio, duration }: { base64Audio: string, dur
             </div>
             <audio 
                 ref={audioRef}
-                src={`data:audio/mp4;base64,${base64Audio}`} 
+                src={audioUrl} 
                 onTimeUpdate={handleTimeUpdate}
                 onEnded={handleEnded}
                 style={{ display: 'none' }}
@@ -118,9 +118,9 @@ export default function Archive({ serverIp }: { serverIp: string }) {
         fetchArchives();
     }, [serverIp]);
 
-    const playAudio = (base64Audio: string) => {
+    const playAudio = (audioUrl: string) => {
         try {
-            const snd = new Audio("data:audio/m4a;base64," + base64Audio);
+            const snd = new Audio(audioUrl);
             snd.play();
         } catch(e) {
             console.error("Ses oynatılamadı", e);
@@ -266,7 +266,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                         </div>
                                         
                                         {msg.type === 'audio' ? (
-                                            <CustomAudioPlayer base64Audio={msg.content} duration={msg.duration} />
+                                            <CustomAudioPlayer audioUrl={msg.content} duration={msg.duration} />
                                         ) : (
                                             <div style={{ fontSize: '14px', lineHeight: '1.4' }}>
                                                 {msg.content}
