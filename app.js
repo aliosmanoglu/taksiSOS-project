@@ -67,8 +67,145 @@ const bucket = getStorage().bucket();
 let channelStates = {}; // Örn: { "room_id": { isChannelActive: true, activeSpeakerId: "socket_id", tempFileName: "..." } }
 let writeStreams = {}; // { "socket_id": WriteStream }
 
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'taksisos_super_secret_key_2026';
+
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+
+// Auth & Registration endpoints
+app.post('/api/register', async (req, res) => {
+    try {
+        const { name, phone, plate, pushToken, imageBase64 } = req.body;
+        if (!name || !phone || !plate || !imageBase64) {
+            return res.status(400).json({ error: 'Eksik bilgi' });
+        }
+
+        // Upload image to Firebase Storage
+        const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        const fileName = `driver_cards/${phone}_${Date.now()}.jpg`;
+        const file = bucket.file(fileName);
+        
+        await file.save(buffer, {
+            metadata: { contentType: 'image/jpeg' }
+        });
+        
+        // Make the file publicly accessible so admin panel can see it
+        await file.makePublic();
+        const idCardUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+        // Save to Firestore
+        await db.collection('users').doc(phone).set({
+            name,
+            phone,
+            plate,
+            pushToken,
+            idCardUrl,
+            status: 'pending',
+            createdAt: Date.now()
+        });
+
+        res.json({ success: true, status: 'pending' });
+    } catch (e) {
+        console.error('Register error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/login', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        if (!phone) return res.status(400).json({ error: 'Telefon numarası gerekli' });
+
+        const userDoc = await db.collection('users').doc(phone).get();
+        if (!userDoc.exists) {
+            return res.json({ status: 'not_found' });
+        }
+
+        const userData = userDoc.data();
+        if (userData.status === 'approved') {
+            const token = jwt.sign({ phone }, JWT_SECRET); // No expiration
+            return res.json({ status: 'approved', token, user: userData });
+        }
+
+        res.json({ status: userData.status });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/pending-users', async (req, res) => {
+    try {
+        const snapshot = await db.collection('users').where('status', '==', 'pending').get();
+        let pendingUsers = [];
+        snapshot.forEach(doc => pendingUsers.push({ id: doc.id, ...doc.data() }));
+        res.json(pendingUsers);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/admin/approve-user', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        const userDoc = await db.collection('users').doc(phone).get();
+        if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+        
+        const userData = userDoc.data();
+
+        // Delete photo from storage (KVKK)
+        if (userData.idCardUrl) {
+            try {
+                // Extract filename from URL
+                const urlParts = userData.idCardUrl.split('/');
+                const fileName = urlParts.slice(urlParts.indexOf(bucket.name) + 1).join('/');
+                await bucket.file(fileName).delete();
+            } catch (err) {
+                console.error('Failed to delete image:', err);
+            }
+        }
+
+        await db.collection('users').doc(phone).update({
+            status: 'approved',
+            idCardUrl: null
+        });
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/admin/reject-user', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        const userDoc = await db.collection('users').doc(phone).get();
+        if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+        
+        const userData = userDoc.data();
+
+        if (userData.idCardUrl) {
+            try {
+                const urlParts = userData.idCardUrl.split('/');
+                const fileName = urlParts.slice(urlParts.indexOf(bucket.name) + 1).join('/');
+                await bucket.file(fileName).delete();
+            } catch (err) {
+                console.error('Failed to delete image:', err);
+            }
+        }
+
+        await db.collection('users').doc(phone).update({
+            status: 'rejected',
+            idCardUrl: null
+        });
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 let activeArchives = {};
 
@@ -118,6 +255,25 @@ app.get('/', (req, res) => {
     res.sendFile(__dirname + '/index.html');
 });
 
+
+io.use(async (socket, next) => {
+    const token = socket.handshake.auth.token;
+    if (!token) {
+        return next(new Error('Authentication error'));
+    }
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        // Check firestore to see if user is still approved (so banned users can't connect)
+        const userDoc = await db.collection('users').doc(decoded.phone).get();
+        if (!userDoc.exists || userDoc.data().status !== 'approved') {
+            return next(new Error('Banned or not approved'));
+        }
+        socket.userPhone = decoded.phone;
+        next();
+    } catch (err) {
+        next(new Error('Authentication error'));
+    }
+});
 
 io.on('connection', (socket) => {
 

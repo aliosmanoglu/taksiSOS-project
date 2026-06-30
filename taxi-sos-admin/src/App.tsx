@@ -3,8 +3,9 @@ import { io, Socket } from 'socket.io-client';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { LogOut, AlertTriangle, Users, Map as MapIcon, Car, Archive as ArchiveIcon } from 'lucide-react';
+import { LogOut, AlertTriangle, Users, Map as MapIcon, Car, Archive as ArchiveIcon, UserCheck } from 'lucide-react';
 import Archive from './Archive';
+import Approvals from './Approvals';
 
 // Custom Map Markers
 const createCustomIcon = (color: string, isSOS: boolean = false) => {
@@ -51,7 +52,7 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [serverIp, setServerIp] = useState('https://taksisos-project.onrender.com');
-  const [activeTab, setActiveTab] = useState<'live' | 'archive'>('live');
+  const [activeTab, setActiveTab] = useState<'live' | 'archive' | 'approvals'>('live');
   
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -174,6 +175,13 @@ function App() {
              >
                 <ArchiveIcon size={14} /> SOS Arşivi
              </button>
+             <button 
+                className={`glass-button ${activeTab === 'approvals' ? 'primary' : ''}`} 
+                onClick={() => setActiveTab('approvals')}
+                style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px', fontSize: '14px' }}
+             >
+                <UserCheck size={14} /> Kullanıcı Onayları
+             </button>
           </div>
         </div>
         <div>
@@ -204,6 +212,8 @@ function App() {
       <div className="main-content">
         {activeTab === 'archive' ? (
           <Archive serverIp={serverIp} />
+        ) : activeTab === 'approvals' ? (
+          <Approvals serverIp={serverIp} />
         ) : (
           <>
             {/* Map */}
