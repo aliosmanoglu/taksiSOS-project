@@ -2,7 +2,7 @@
   "expo": {
     "name": "TaxiSOS",
     "slug": "taxi-sos-mobile",
-    "version": "1.0.10",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "scheme": "taxisosmobile",
@@ -18,7 +18,8 @@
         "UIBackgroundModes": [
           "audio",
           "fetch"
-        ]
+        ],
+        "NSPhotoLibraryUsageDescription": "Acil durum veya profil için fotoğraf kütüphanesine erişim gereklidir."
       }
     },
     "android": {
@@ -63,7 +64,14 @@
       "expo-font",
       "expo-video",
       "expo-notifications",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Şoför tanıtım kartı seçimi için galeri izni gereklidir.",
+          "cameraPermission": "Şoför tanıtım kartı fotoğrafı çekmek için kamera izni gereklidir."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
