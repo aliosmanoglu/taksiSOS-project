@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image, ActivityIndicator, Easing } from 'react-native';
 
 // --- Hata ve Uyarı Gizleme ---
 LogBox.ignoreLogs([
@@ -10,8 +10,26 @@ LogBox.ignoreLogs([
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import * as Haptics from 'expo-haptics';
+// Notifee'yi dinamik olarak yüklüyoruz. Expo Go'da çökmeyi önlemek için try-catch kullanıyoruz.
+let notifee: any = null;
+let AndroidImportance: any = null;
+try {
+  const notifeeModule = require('@notifee/react-native');
+  notifee = notifeeModule.default;
+  AndroidImportance = notifeeModule.AndroidImportance;
+} catch (e) {
+  console.log("Notifee native module bulunamadı. Foreground Service Expo Go'da çalışmayacak.");
+  notifee = {
+    requestPermission: async () => {},
+    createChannel: async () => 'mock_channel',
+    displayNotification: async () => {},
+    stopForegroundService: async () => {}
+  };
+  AndroidImportance = { HIGH: 4 };
+}
+
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -148,6 +166,22 @@ export default function App() {
   const splashFormOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    // Ses modunu uygulama başlatılırken 1 kez ayarla (Her seste ayarlayıp 1-2sn gecikme yaratmaması için)
+    const initAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          playThroughEarpieceAndroid: false,
+          shouldDuckAndroid: false,
+          interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+          interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+        });
+      } catch (e) { }
+    };
+    initAudio();
+
     SplashScreen.preventAutoHideAsync().catch(() => { });
 
     setTimeout(() => {
@@ -184,7 +218,38 @@ export default function App() {
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const recordingRef = useRef<Audio.Recording | null>(null);
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<MapView>(null);
+
+  // --- NOTIFEE FOREGROUND SERVICE EFEKTİ ---
+  useEffect(() => {
+    async function toggleForegroundService() {
+      if (activeSOSRoom) {
+        await notifee.requestPermission();
+        const channelId = await notifee.createChannel({
+          id: 'sos_channel',
+          name: 'SOS Telsizi',
+          importance: AndroidImportance.HIGH,
+        });
+
+        await notifee.displayNotification({
+          title: '🚨 SOS Telsizi Aktif',
+          body: 'Telsizden gelen sesleri arka planda dinlemeye devam ediyorsunuz.',
+          android: {
+            channelId,
+            asForegroundService: true,
+            color: '#ff0000',
+            ongoing: true,
+          },
+        });
+      } else {
+        await notifee.stopForegroundService();
+      }
+    }
+    toggleForegroundService();
+  }, [activeSOSRoom]);
+
+  const [testLoading, setTestLoading] = useState(false); // Geçici Test State'i
+
   const [recordingUI, setRecordingUI] = useState(false);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -330,27 +395,33 @@ export default function App() {
     setPlayingAudioId(msg.id);
 
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        playThroughEarpieceAndroid: false
-      });
-
       let soundToPlay;
       if (msg.content.startsWith('http')) {
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: msg.content },
-          { shouldPlay: true }
-        );
-        soundToPlay = sound;
+        const fileName = msg.content.split('/').pop()?.split('?')[0] || `history_voice_${msg.id}.wav`;
+        const fileUri = FileSystem.documentDirectory + fileName;
+        const fileInfo = await FileSystem.getInfoAsync(fileUri);
+
+        if (fileInfo.exists) {
+          const { sound } = await Audio.Sound.createAsync(
+            { uri: fileUri },
+            { shouldPlay: true, volume: 1.0 }
+          );
+          soundToPlay = sound;
+        } else {
+          const { uri } = await FileSystem.downloadAsync(msg.content, fileUri);
+          const { sound } = await Audio.Sound.createAsync(
+            { uri },
+            { shouldPlay: true, volume: 1.0 }
+          );
+          soundToPlay = sound;
+        }
       } else {
         const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
         const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
         await FileSystem.writeAsStringAsync(fileUri, pureBase64, { encoding: FileSystem.EncodingType.Base64 });
         const { sound } = await Audio.Sound.createAsync(
           { uri: fileUri },
-          { shouldPlay: true }
+          { shouldPlay: true, volume: 1.0 }
         );
         soundToPlay = sound;
       }
@@ -393,6 +464,7 @@ export default function App() {
 
   useEffect(() => {
     const loadCredentials = async () => {
+      let hasCredentials = false;
       try {
         const storedData = await AsyncStorage.getItem('user_credentials');
         if (storedData) {
@@ -408,6 +480,10 @@ export default function App() {
           if (data.name) setName(data.name);
           if (data.plate) setPlate(data.plate);
           if (data.phone) setPhone(data.phone);
+          
+          if (data.name && data.plate && data.phone) {
+            hasCredentials = true;
+          }
         } else {
           // Eski FileSystem verisi varsa AsyncStorage'a taşı
           const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
@@ -419,12 +495,19 @@ export default function App() {
             if (data.plate) setPlate(data.plate);
             if (data.phone) setPhone(data.phone);
             await AsyncStorage.setItem('user_credentials', content);
+            
+            if (data.name && data.plate && data.phone) {
+              hasCredentials = true;
+            }
           }
         }
       } catch (err) {
         console.log("Kimlik bilgileri yüklenirken hata oluştu:", err);
       } finally {
         setIsCheckingAuth(false);
+        if (!hasCredentials) {
+          setIsAutoLoginTriggered(true);
+        }
       }
     };
     loadCredentials();
@@ -714,17 +797,20 @@ export default function App() {
 
         setIncomingSpeaker(speakerName);
 
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
-          playThroughEarpieceAndroid: false
-        });
-
         let soundToPlay;
         if (dataUrl.startsWith('http')) {
-          const { sound } = await Audio.Sound.createAsync({ uri: dataUrl });
-          soundToPlay = sound;
+          const fileName = dataUrl.split('/').pop()?.split('?')[0] || `incoming_voice_${Date.now()}.wav`;
+          const fileUri = FileSystem.documentDirectory + fileName;
+          const fileInfo = await FileSystem.getInfoAsync(fileUri);
+
+          if (fileInfo.exists) {
+            const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
+            soundToPlay = sound;
+          } else {
+            const { uri } = await FileSystem.downloadAsync(dataUrl, fileUri);
+            const { sound } = await Audio.Sound.createAsync({ uri });
+            soundToPlay = sound;
+          }
         } else {
           const base64Data = dataUrl.includes('base64,') ? dataUrl.split('base64,')[1] : dataUrl;
           const fileUri = FileSystem.documentDirectory + `incoming_voice_${Date.now()}.m4a`;
@@ -747,6 +833,9 @@ export default function App() {
           try { await incomingSoundRef.current.stopAsync(); await incomingSoundRef.current.unloadAsync(); } catch (e) { }
         }
         incomingSoundRef.current = soundToPlay;
+
+        // Sesi maksimum yüksekliğe zorla
+        await soundToPlay.setVolumeAsync(1.0);
         await soundToPlay.playAsync();
       } catch (e) {
         setIncomingSpeaker(null);
@@ -940,35 +1029,35 @@ export default function App() {
 
   // --- RENDERING VIEWS ---
 
-  if (!isConnected) {
-    if (isCheckingAuth || (isConnecting && isAutoLoginTriggered)) {
+  if (!isConnected || testLoading) {
+    if (isCheckingAuth || isConnecting || testLoading) {
       return (
-        <KeyboardAvoidingView
-          style={[styles.container, { backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }]}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <View style={[styles.loginOverlay, { backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }]}>
-            <Animated.Image
-              source={require('../assets/images/logo.png')}
-              style={{
-                width: 120,
-                height: 120,
-                alignSelf: 'center',
-                borderRadius: 25,
-                transform: [
-                  { translateY: splashLogoTranslateY },
-                  { scale: splashLogoScale }
-                ]
-              }}
-            />
-            <Animated.View style={{ opacity: splashFormOpacity, alignItems: 'center' }}>
-              <ActivityIndicator size="large" color="#ffffff" style={{ marginTop: 30 }} />
-              <Text style={{ color: '#fff', marginTop: 15, fontSize: 16 }}>Bağlanıyor...</Text>
-            </Animated.View>
-          </View>
-        </KeyboardAvoidingView>
+        <View style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }}>
+          
+          <Animated.Image
+            source={require('../assets/images/logo.png')}
+            style={{
+              width: 150,
+              height: 150,
+              borderRadius: 10,
+              borderWidth: 2,
+              borderColor: 'rgba(255, 255, 255, 0.1)',
+              transform: [
+                { translateY: splashLogoTranslateY },
+                { scale: splashLogoScale }
+              ]
+            }}
+          />
+          
+          <Animated.View style={{ opacity: splashFormOpacity, alignItems: 'center', marginTop: 30 }}>
+            <ActivityIndicator size="large" color="#ff3b30" />
+
+          </Animated.View>
+
+        </View>
       );
     }
+
 
     return (
       <KeyboardAvoidingView
@@ -1128,17 +1217,17 @@ export default function App() {
         <View style={styles.pttBox}>
           {activeSOSRoom && (
             <>
-              {isChannelLocked && lockedBy && (
-                <Text style={styles.pttStatusText}>🔒 {lockedBy} konuşuyor...</Text>
-              )}
               <TouchableOpacity
                 style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, !isMicMuted && styles.pttButtonRecording, isChannelLocked && styles.pttButtonLocked]}
                 onPressIn={handleStartPtt}
                 onPressOut={handleStopPtt}
                 activeOpacity={0.8}
               >
-                <MaterialIcons name="mic" size={64} color={isChannelLocked ? "#888" : "white"} />
+                <MaterialIcons name="mic" size={64} color="white" />
               </TouchableOpacity>
+              {isChannelLocked && lockedBy && (
+                <Text style={[styles.pttStatusText, { marginTop: 15 }]}>{lockedBy} konuşuyor...</Text>
+              )}
             </>
           )}
         </View>
@@ -1227,6 +1316,8 @@ export default function App() {
             try {
               const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
               await FileSystem.deleteAsync(credentialsPath, { idempotent: true });
+              await AsyncStorage.removeItem('user_credentials');
+              await AsyncStorage.removeItem('activeSOSRoom');
               setName("");
               setPlate("");
               setPhone("");
@@ -1348,7 +1439,7 @@ const styles = StyleSheet.create({
   pttStatusText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 18, marginBottom: 20 },
   pttButton: { width: '100%', height: 100, backgroundColor: '#333', borderRadius: 50, justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#555' },
   pttButtonRecording: { backgroundColor: '#81c784', borderColor: '#1b5e20' },
-  pttButtonLocked: { backgroundColor: '#555', borderColor: '#333' },
+  pttButtonLocked: { backgroundColor: '#ff3333', borderColor: '#cc0000' },
   pttButtonText: { color: 'white', fontSize: 24, fontWeight: 'bold' },
 
   sosMarkerContainer: { alignItems: 'center', justifyContent: 'center' },

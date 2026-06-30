@@ -154,10 +154,12 @@ io.on('connection', (socket) => {
                     existingDevice.lat = data.lat;
                     existingDevice.lon = data.lon;
                     existingDevice.name = data.name;
+                    existingDevice.phone = data.phone;
                 } else {
                     registeredDevices.push({
                         pushToken: data.pushToken,
                         name: data.name,
+                        phone: data.phone,
                         lat: data.lat,
                         lon: data.lon
                     });
@@ -292,8 +294,8 @@ io.on('connection', (socket) => {
         // Burada `registeredDevices` kullanıyoruz çünkü `users` dizisinden düşmüş (çıkmış) olabilirler.
         registeredDevices.forEach(device => {
             let km = calculateKilometers(lat, lon, device.lat, device.lon);
-            // Kendimize push atmamak için ufak bir kontrol (aynı pushToken ise)
-            if (km <= 5 && device.pushToken !== user.pushToken) {
+            // Kendimize push atmamak için ufak bir kontrol (aynı pushToken ise veya aynı phone ise)
+            if (km <= 5 && device.pushToken !== user.pushToken && device.phone !== user.phone) {
                 if (Expo.isExpoPushToken(device.pushToken)) {
                     pushMessages.push({
                         to: device.pushToken,
@@ -502,7 +504,7 @@ io.on('connection', (socket) => {
         if (channelStates[room] && channelStates[room].activeSpeakerId === socket.id) {
             // Yazma işlemini bitir
             if (writeStreams[socket.id]) {
-                writeStreams[socket.id].end();
+                await new Promise(resolve => writeStreams[socket.id].end(resolve));
                 delete writeStreams[socket.id];
             }
 

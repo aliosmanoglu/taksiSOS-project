@@ -41,20 +41,20 @@ const CustomAudioPlayer = ({ audioUrl, duration }: { audioUrl: string, duration:
     };
 
     return (
-        <div style={{ 
-            display: 'flex', alignItems: 'center', gap: '12px', 
-            background: 'rgba(255, 255, 255, 0.08)', 
-            padding: '10px 15px', 
-            borderRadius: '24px', 
+        <div style={{
+            display: 'flex', alignItems: 'center', gap: '12px',
+            background: 'rgba(255, 255, 255, 0.08)',
+            padding: '10px 15px',
+            borderRadius: '24px',
             border: '1px solid rgba(255, 255, 255, 0.1)',
             boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
-            width: '260px' 
+            width: '260px'
         }}>
-            <button 
+            <button
                 onClick={togglePlay}
                 style={{
-                    background: 'var(--accent-color)', border: 'none', borderRadius: '50%', 
-                    width: '36px', height: '36px', display: 'flex', justifyContent: 'center', 
+                    background: 'var(--accent-color)', border: 'none', borderRadius: '50%',
+                    width: '36px', height: '36px', display: 'flex', justifyContent: 'center',
                     alignItems: 'center', cursor: 'pointer', color: '#fff', flexShrink: 0,
                     boxShadow: '0 2px 8px rgba(88, 166, 255, 0.4)',
                     transition: 'transform 0.2s'
@@ -65,27 +65,27 @@ const CustomAudioPlayer = ({ audioUrl, duration }: { audioUrl: string, duration:
                 {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" style={{ marginLeft: '3px' }} />}
             </button>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                <input 
-                    type="range" 
-                    min="0" max="100" 
-                    value={progress} 
+                <input
+                    type="range"
+                    min="0" max="100"
+                    value={progress}
                     onChange={handleSeek}
                     style={{
-                        width: '100%', height: '4px', cursor: 'pointer', 
+                        width: '100%', height: '4px', cursor: 'pointer',
                         accentColor: 'var(--accent-color)',
                         background: 'rgba(255,255,255,0.2)',
                         borderRadius: '2px',
                         appearance: 'none',
                         outline: 'none'
-                    }} 
+                    }}
                 />
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', flexShrink: 0, minWidth: '35px', textAlign: 'right', fontWeight: '500' }}>
                 {Math.round(duration || 0)}sn
             </div>
-            <audio 
+            <audio
                 ref={audioRef}
-                src={audioUrl} 
+                src={audioUrl}
                 onTimeUpdate={handleTimeUpdate}
                 onEnded={handleEnded}
                 style={{ display: 'none' }}
@@ -122,7 +122,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
         try {
             const snd = new Audio(audioUrl);
             snd.play();
-        } catch(e) {
+        } catch (e) {
             console.error("Ses oynatılamadı", e);
             alert("Ses dosyası desteklenmiyor veya bozuk.");
         }
@@ -157,12 +157,12 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                         <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>Kayıtlı çağrı bulunamadı.</div>
                     )}
                     {archives.map(arch => (
-                        <div 
-                            key={arch.id} 
+                        <div
+                            key={arch.id}
                             onClick={() => setSelectedArchive(arch)}
-                            style={{ 
-                                padding: '15px', 
-                                margin: '5px 0', 
+                            style={{
+                                padding: '15px',
+                                margin: '5px 0',
                                 background: selectedArchive?.id === arch.id ? 'rgba(88, 166, 255, 0.2)' : 'rgba(255, 255, 255, 0.03)',
                                 border: selectedArchive?.id === arch.id ? '1px solid var(--accent-color)' : '1px solid transparent',
                                 borderRadius: '8px',
@@ -175,7 +175,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                 {arch.creator?.name || 'Bilinmeyen Taksi'}
                             </div>
                             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>
-                                <span><Calendar size={10} style={{marginRight: '3px'}}/>{formatDate(arch.startTime)}</span>
+                                <span><Calendar size={10} style={{ marginRight: '3px' }} />{formatDate(arch.startTime)}</span>
                                 <span>{arch.messages?.length || 0} Mesaj</span>
                             </div>
                         </div>
@@ -196,7 +196,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                     <>
                         <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', background: 'rgba(248, 81, 73, 0.1)' }}>
                             <h2 style={{ fontSize: '20px', margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <AlertCircle color="var(--danger-color)" /> 
+                                <AlertCircle color="var(--danger-color)" />
                                 {selectedArchive.creator?.name} - Olay Detayı
                             </h2>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '13px' }}>
@@ -205,7 +205,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                 <div><strong>Başlangıç:</strong> {formatDate(selectedArchive.startTime)}</div>
                                 <div><strong>Süre:</strong> {formatDuration(selectedArchive.startTime, selectedArchive.endTime)}</div>
                             </div>
-                            
+
                             <div style={{ marginTop: '15px' }}>
                                 <strong style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                                     <Users size={14} /> Yardıma Giden Taksiler ({selectedArchive.helpers?.length || 0}):
@@ -221,17 +221,17 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                     )}
                                 </div>
                             </div>
-                            
+
                             {selectedArchive.locationHistory && selectedArchive.locationHistory.length > 0 && (
                                 <div style={{ marginTop: '20px' }}>
                                     <h3 style={{ fontSize: '14px', borderBottom: '1px solid var(--border-color)', paddingBottom: '5px', marginBottom: '10px' }}>
                                         Harita Simülasyonu
                                     </h3>
-                                    <LocationSimulation 
-                                        history={selectedArchive.locationHistory} 
+                                    <LocationSimulation
+                                        history={selectedArchive.locationHistory}
                                         messages={selectedArchive.messages}
-                                        startTime={selectedArchive.startTime} 
-                                        endTime={selectedArchive.endTime} 
+                                        startTime={selectedArchive.startTime}
+                                        endTime={selectedArchive.endTime}
                                     />
                                 </div>
                             )}
@@ -239,7 +239,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
 
                         <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
                             <h3 style={{ fontSize: '14px', borderBottom: '1px solid var(--border-color)', paddingBottom: '5px', color: 'var(--text-secondary)' }}>Zaman Çizelgesi (Mesajlar)</h3>
-                            
+
                             {(!selectedArchive.messages || selectedArchive.messages.length === 0) && (
                                 <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>Kayıtlı telsiz mesajı bulunmuyor.</div>
                             )}
@@ -247,9 +247,9 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                             {selectedArchive.messages?.map((msg: any) => {
                                 const isCreator = msg.senderId === selectedArchive.creator?.id || msg.senderName === selectedArchive.creator?.name;
                                 return (
-                                    <div key={msg.id} style={{ 
-                                        display: 'flex', 
-                                        flexDirection: 'column', 
+                                    <div key={msg.id} style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
                                         alignSelf: isCreator ? 'flex-end' : 'flex-start',
                                         maxWidth: '70%',
                                         background: isCreator ? 'rgba(248, 81, 73, 0.15)' : 'rgba(255, 255, 255, 0.05)',
@@ -264,7 +264,7 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                                             </span>
                                             <span>{new Date(msg.timestamp).toLocaleTimeString('tr-TR')}</span>
                                         </div>
-                                        
+
                                         {msg.type === 'audio' ? (
                                             <CustomAudioPlayer audioUrl={msg.content} duration={msg.duration} />
                                         ) : (
