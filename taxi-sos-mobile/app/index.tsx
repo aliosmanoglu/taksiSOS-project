@@ -700,6 +700,7 @@ export default function App() {
       AsyncStorage.getItem('activeSOSRoom').then(storedRoom => {
         if (storedRoom) {
           newSocket.emit('join_sos_room', storedRoom);
+          setActiveSOSRoom(storedRoom); // Geri döndüğünde state'e de set et
         }
       }).catch(() => { });
       addLog(`✅ Bağlanıldı: ${name}`);
@@ -1299,7 +1300,7 @@ export default function App() {
     <View style={styles.container}>
 
       {/* Üst Kısım Bilgi Paneli */}
-      <View style={{ position: 'absolute', top: 40, left: 20, zIndex: 100 }}>
+      <View style={{ position: 'absolute', top: 65, left: 20, zIndex: 100 }}>
         <View style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}>
           <Text style={{ color: '#4CAF50', fontSize: 14, fontWeight: 'bold' }}>👤 {name}</Text>
           {plate ? <Text style={{ color: '#fff', fontSize: 11, marginTop: 2 }}>🎫 Plaka: {plate}</Text> : null}
@@ -1307,7 +1308,7 @@ export default function App() {
       </View>
 
       {/* Bağlantıyı Kes Butonu */}
-      <View style={{ position: 'absolute', top: 40, right: 20, zIndex: 100 }}>
+      <View style={{ position: 'absolute', top: 65, right: 20, zIndex: 100 }}>
         <TouchableOpacity
           style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}
           onPress={async () => {

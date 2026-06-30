@@ -15,7 +15,7 @@ export const usePTT = (socket: Socket | null, activeSOSRoom: string | null) => {
       sampleRate: 16000,
       channels: 1,
       bitsPerSample: 16,
-      audioSource: 1, // 1 for MIC
+      audioSource: 7, // 7 for VOICE_COMMUNICATION (Auto Gain Control, Echo Canceler ve Noise Suppressor aktif)
       bufferSize: 4096,
       wavFile: '' // TypeScript hatasını çözmek için boş eklendi
     };

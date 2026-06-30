@@ -347,11 +347,18 @@ io.on('connection', (socket) => {
     });
 
     socket.on('join_sos_room', (room) => {
-        socket.join(room);
         let user = users.find(u => u.id === socket.id);
-        if (user) {
-            user.activeRoom = room;
-            io.emit('all_users_update', users);
+        if (!user) return;
+
+        // ODA ARTIK AKTİF DEĞİLSE (örn: kapanmışsa) KULLANICIYA BİLDİR Kİ EKRANI DÜZELTSİN
+        if (!activeArchives[room]) {
+            socket.emit('sos_ended', { room: room });
+            return;
+        }
+
+        socket.join(room);
+        user.activeRoom = room;
+        io.emit('all_users_update', users);
 
             if (activeArchives[room] && room !== "sos_room_" + user.phone) {
                 let existing = activeArchives[room].helpers.find(h => h.phone === user.phone);
