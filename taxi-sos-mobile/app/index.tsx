@@ -22,10 +22,10 @@ try {
 } catch (e) {
   console.log("Notifee native module bulunamadı. Foreground Service Expo Go'da çalışmayacak.");
   notifee = {
-    requestPermission: async () => {},
+    requestPermission: async () => { },
     createChannel: async () => 'mock_channel',
-    displayNotification: async () => {},
-    stopForegroundService: async () => {}
+    displayNotification: async () => { },
+    stopForegroundService: async () => { }
   };
   AndroidImportance = { HIGH: 4 };
 }
@@ -480,7 +480,7 @@ export default function App() {
           if (data.name) setName(data.name);
           if (data.plate) setPlate(data.plate);
           if (data.phone) setPhone(data.phone);
-          
+
           if (data.name && data.plate && data.phone) {
             hasCredentials = true;
           }
@@ -495,7 +495,7 @@ export default function App() {
             if (data.plate) setPlate(data.plate);
             if (data.phone) setPhone(data.phone);
             await AsyncStorage.setItem('user_credentials', content);
-            
+
             if (data.name && data.plate && data.phone) {
               hasCredentials = true;
             }
@@ -1034,7 +1034,7 @@ export default function App() {
     if (isCheckingAuth || isConnecting || testLoading) {
       return (
         <View style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }}>
-          
+
           <Animated.Image
             source={require('../assets/images/logo.png')}
             style={{
@@ -1049,7 +1049,7 @@ export default function App() {
               ]
             }}
           />
-          
+
           <Animated.View style={{ opacity: splashFormOpacity, alignItems: 'center', marginTop: 30 }}>
             <ActivityIndicator size="large" color="#ff3b30" />
 

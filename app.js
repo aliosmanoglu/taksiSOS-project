@@ -222,7 +222,7 @@ io.on('connection', (socket) => {
 
                 let km = calculateKilometers(data.lat, data.lon, u.lat, u.lon);
 
-                if (km <= 5) {
+                if (true) {
                     io.to(u.id).emit('location_update', {
                         id: data.id,
                         lat: data.lat,
@@ -279,7 +279,7 @@ io.on('connection', (socket) => {
         // Sadece online olanlara soket üzerinden anlık bildirim (Uygulaması açık olanlar)
         users.forEach(u => {
             let km = calculateKilometers(lat, lon, u.lat, u.lon);
-            if (km <= 5 && u.id !== socket.id) {
+            if (u.id !== socket.id) {
                 io.to(u.id).emit('sos_alert', {
                     from: user.name,
                     lat: lat,
@@ -295,7 +295,7 @@ io.on('connection', (socket) => {
         registeredDevices.forEach(device => {
             let km = calculateKilometers(lat, lon, device.lat, device.lon);
             // Kendimize push atmamak için ufak bir kontrol (aynı pushToken ise veya aynı phone ise)
-            if (km <= 5 && device.pushToken !== user.pushToken && device.phone !== user.phone) {
+            if (device.pushToken !== user.pushToken && device.phone !== user.phone) {
                 if (Expo.isExpoPushToken(device.pushToken)) {
                     pushMessages.push({
                         to: device.pushToken,
