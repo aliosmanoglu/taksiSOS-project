@@ -1,4 +1,5 @@
 const express = require('express');
+const bcrypt = require('bcryptjs');
 const app = express();
 const http = require('http');
 const { Server } = require('socket.io');
@@ -76,10 +77,17 @@ app.use(express.json({ limit: '10mb' }));
 // Auth & Registration endpoints
 app.post('/api/register', async (req, res) => {
     try {
-        const { name, phone, plate, pushToken, imageBase64 } = req.body;
-        if (!name || !phone || !plate || !imageBase64) {
+        const { name, phone, plate, password, pushToken, imageBase64 } = req.body;
+        if (!name || !phone || !plate || !password || !imageBase64) {
             return res.status(400).json({ error: 'Eksik bilgi' });
         }
+
+        const existingDoc = await db.collection('users').doc(phone).get();
+        if (existingDoc.exists) {
+            return res.status(400).json({ error: 'Bu telefon numarası ile zaten kayıt olunmuş.' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         // Upload image to Firebase Storage
         const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
@@ -101,6 +109,7 @@ app.post('/api/register', async (req, res) => {
             name,
             phone,
             plate,
+            password: hashedPassword,
             pushToken,
             idCardUrl,
             status: 'pending',
@@ -116,8 +125,8 @@ app.post('/api/register', async (req, res) => {
 
 app.post('/api/login', async (req, res) => {
     try {
-        const { phone } = req.body;
-        if (!phone) return res.status(400).json({ error: 'Telefon numarası gerekli' });
+        const { phone, password } = req.body;
+        if (!phone || !password) return res.status(400).json({ error: 'Telefon numarası ve şifre gerekli' });
 
         const userDoc = await db.collection('users').doc(phone).get();
         if (!userDoc.exists) {
@@ -125,6 +134,16 @@ app.post('/api/login', async (req, res) => {
         }
 
         const userData = userDoc.data();
+
+        if (!userData.password) {
+             return res.json({ status: 'rejected', error: 'Hesabınız eski sisteme ait ve şifresizdir. Lütfen yeniden kayıt olun.' });
+        }
+
+        const isMatch = await bcrypt.compare(password, userData.password);
+        if (!isMatch) {
+            return res.json({ status: 'wrong_password', error: 'Hatalı şifre' });
+        }
+
         if (userData.status === 'approved') {
             const token = jwt.sign({ phone }, JWT_SECRET); // No expiration
             return res.json({ status: 'approved', token, user: userData });

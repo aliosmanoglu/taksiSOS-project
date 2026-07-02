@@ -11,6 +11,7 @@ import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 // Notifee'yi dinamik olarak yüklüyoruz. Expo Go'da çökmeyi önlemek için try-catch kullanıyoruz.
 let notifee: any = null;
@@ -126,6 +127,11 @@ export default function App() {
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [password, setPassword] = useState("");
+  const [isCameraScanning, setIsCameraScanning] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<any>(null);
   const [isKvkkChecked, setIsKvkkChecked] = useState(false);
   const [isTermsChecked, setIsTermsChecked] = useState(false);
   const [showLegalModal, setShowLegalModal] = useState<{type: 'kvkk' | 'terms' | null}>({type: null});
@@ -610,7 +616,7 @@ export default function App() {
   };
 
   const registerUser = async () => {
-    if (!name || !plate || !phone || !imageBase64) return Alert.alert('Uyarı', 'Tüm alanları ve fotoğrafı doldurun.');
+    if (!name || !plate || !phone || !password || !imageBase64) return Alert.alert('Uyarı', 'Tüm alanları ve fotoğrafı doldurun.');
     if (!isKvkkChecked || !isTermsChecked) return Alert.alert('Uyarı', 'Kayıt olmak için Kullanıcı Sözleşmesi ve KVKK metnini onaylamanız gerekmektedir.');
     setIsConnecting(true);
     try {
@@ -618,12 +624,13 @@ export default function App() {
       const res = await fetch(`${serverIp}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, plate, phone, pushToken, imageBase64: 'data:image/jpeg;base64,' + imageBase64 })
+        body: JSON.stringify({ name, plate, phone, password, pushToken, imageBase64: 'data:image/jpeg;base64,' + imageBase64 })
       });
       const data = await res.json();
       if (data.success) {
         setAuthStatus('pending');
-        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, serverIp }));
+        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, password, serverIp }));
+        Alert.alert('Başarılı', 'Kayıt talebiniz alındı. Yöneticiler tarafından onaylandığında giriş yapabileceksiniz.');
       } else {
         Alert.alert('Hata', data.error || 'Kayıt başarısız.');
       }
@@ -635,22 +642,28 @@ export default function App() {
   };
 
   const handleLoginClick = async () => {
-    if (!name || !plate || !phone) return Alert.alert('Uyarı', 'Lütfen tüm alanları doldurun.');
+    if (!phone || !password) return Alert.alert('Uyarı', 'Lütfen telefon numarası ve şifrenizi girin.');
     setIsConnecting(true);
     try {
       const res = await fetch(`${serverIp}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone })
+        body: JSON.stringify({ phone, password })
       });
       const data = await res.json();
       if (data.status === 'approved') {
         setAuthStatus('approved');
+        setName(data.user.name);
+        setPlate(data.user.plate);
         await AsyncStorage.setItem('user_token', data.token);
-        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, serverIp }));
+        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name: data.user.name, plate: data.user.plate, phone, password, serverIp }));
         handleConnect();
       } else if (data.status === 'not_found') {
-        setAuthStatus('not_found'); // show register form
+        Alert.alert('Hata', 'Bu telefon numarasıyla kayıtlı bir hesap bulunamadı.');
+      } else if (data.error) {
+        Alert.alert('Hata', data.error);
+        if (data.status === 'rejected') setAuthStatus('not_found');
+        if (data.status === 'banned') setAuthStatus('banned');
       } else {
         setAuthStatus(data.status);
       }
@@ -1150,6 +1163,51 @@ export default function App() {
     }
 
 
+    const takePicture = async () => {
+      if (cameraRef.current) {
+        try {
+          const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
+          if (photo && photo.base64) {
+            setImageBase64(photo.base64);
+            setIsCameraScanning(false);
+          }
+        } catch (e) {
+          Alert.alert('Hata', 'Fotoğraf çekilemedi');
+        }
+      }
+    };
+
+    if (isCameraScanning) {
+      if (!cameraPermission?.granted) {
+        return (
+          <View style={[styles.container, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
+            <Text style={{ color: '#fff', fontSize: 16, marginBottom: 20 }}>Kamera izni gerekiyor</Text>
+            <TouchableOpacity onPress={requestCameraPermission} style={styles.connectButton}><Text style={styles.connectButtonText}>İzin Ver</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => setIsCameraScanning(false)} style={{ marginTop: 20 }}><Text style={{ color: '#ff3b30', fontSize: 16 }}>İptal</Text></TouchableOpacity>
+          </View>
+        );
+      }
+      return (
+        <View style={{ flex: 1, backgroundColor: 'black' }}>
+          <CameraView style={{ flex: 1 }} facing="back" ref={cameraRef}>
+            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+               {/* Kredi kartı/ehliyet çerçevesi */}
+               <View style={{ width: Dimensions.get('window').width * 0.85, height: 220, borderWidth: 3, borderColor: '#00ff00', borderRadius: 10, backgroundColor: 'transparent' }} />
+               <Text style={{ color: '#fff', marginTop: 20, fontSize: 16, textAlign: 'center' }}>Lütfen şoför kartınızı çerçevenin içine yerleştirin</Text>
+            </View>
+            <View style={{ position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center', flexDirection: 'row', justifyContent: 'space-around' }}>
+              <TouchableOpacity onPress={() => setIsCameraScanning(false)} style={{ padding: 15, backgroundColor: '#333', borderRadius: 10 }}>
+                <Text style={{ color: '#fff', fontSize: 16 }}>İptal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={takePicture} style={{ padding: 20, backgroundColor: '#ff3b30', borderRadius: 40 }}>
+                <MaterialIcons name="camera" size={30} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          </CameraView>
+        </View>
+      );
+    }
+
     return (
       <KeyboardAvoidingView
         style={[styles.container, { backgroundColor: '#000000' }]}
@@ -1201,61 +1259,79 @@ export default function App() {
                     <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Sistem yöneticileri tarafından uygulamaya erişiminiz kalıcı olarak engellenmiştir.</Text>
                   </View>
                 )}
-                {(authStatus === null || authStatus === 'not_found') && (
+                {(authStatus === null || authStatus === 'not_found') && authMode === 'login' && (
+                  <>
+                    <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
+                    <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Şifre" secureTextEntry placeholderTextColor="#999" />
+                    
+                    <TouchableOpacity style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} onPress={handleLoginClick} disabled={isConnecting}>
+                      {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Giriş Yap</Text>}
+                    </TouchableOpacity>
+
+                    <View style={{ marginTop: 20, alignItems: 'center' }}>
+                      <Text style={{ color: '#ccc', fontSize: 14 }}>Hesabın yok mu?</Text>
+                      <TouchableOpacity onPress={() => setAuthMode('register')} style={{ marginTop: 10 }}>
+                        <Text style={{ color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }}>Kayıt Ol</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+
+                {(authStatus === null || authStatus === 'not_found') && authMode === 'register' && (
                   <>
                     <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
                     <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
                     <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
+                    <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Şifre Belirleyin" secureTextEntry placeholderTextColor="#999" />
                     
-                    
-                    {authStatus === 'not_found' && (
-                      <View style={{ marginTop: 10, marginBottom: 20 }}>
-                         <Text style={{ color: '#ff3b30', fontSize: 13, marginBottom: 10, textAlign: 'center' }}>Sistemde kaydınız bulunamadı. Lütfen Şoför Tanıtım Kartınızı yükleyin.</Text>
-                         {imageBase64 ? (
-                            <Image source={{ uri: 'data:image/jpeg;base64,' + imageBase64 }} style={{ width: '100%', height: 150, borderRadius: 10, marginBottom: 10 }} resizeMode="cover" />
-                         ) : null}
-                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
-                            <TouchableOpacity style={{ flex: 1, backgroundColor: '#333', padding: 12, borderRadius: 10, marginRight: 5, alignItems: 'center' }} onPress={() => pickImage(true)}>
-                               <MaterialIcons name="camera-alt" size={24} color="#fff" />
-                               <Text style={{ color: '#fff', fontSize: 12, marginTop: 5 }}>Kamera</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={{ flex: 1, backgroundColor: '#333', padding: 12, borderRadius: 10, marginLeft: 5, alignItems: 'center' }} onPress={() => pickImage(false)}>
-                               <MaterialIcons name="photo-library" size={24} color="#fff" />
-                               <Text style={{ color: '#fff', fontSize: 12, marginTop: 5 }}>Galeri</Text>
-                            </TouchableOpacity>
-                         </View>
+                    <View style={{ marginTop: 10, marginBottom: 20 }}>
+                        <Text style={{ color: '#ff3b30', fontSize: 13, marginBottom: 10, textAlign: 'center' }}>Lütfen Şoför Tanıtım Kartınızı yükleyin.</Text>
+                        {imageBase64 ? (
+                           <Image source={{ uri: 'data:image/jpeg;base64,' + imageBase64 }} style={{ width: '100%', height: 150, borderRadius: 10, marginBottom: 10 }} resizeMode="cover" />
+                        ) : null}
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
+                           <TouchableOpacity style={{ flex: 1, backgroundColor: '#333', padding: 12, borderRadius: 10, marginRight: 5, alignItems: 'center' }} onPress={async () => {
+                              if (!cameraPermission?.granted) await requestCameraPermission();
+                              setIsCameraScanning(true);
+                           }}>
+                              <MaterialIcons name="camera-alt" size={24} color="#fff" />
+                              <Text style={{ color: '#fff', fontSize: 12, marginTop: 5 }}>Kamera</Text>
+                           </TouchableOpacity>
+                           <TouchableOpacity style={{ flex: 1, backgroundColor: '#333', padding: 12, borderRadius: 10, marginLeft: 5, alignItems: 'center' }} onPress={() => pickImage(false)}>
+                              <MaterialIcons name="photo-library" size={24} color="#fff" />
+                              <Text style={{ color: '#fff', fontSize: 12, marginTop: 5 }}>Galeri</Text>
+                           </TouchableOpacity>
+                        </View>
 
-                         {/* Legal Checkboxes */}
-                         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                            <TouchableOpacity onPress={() => setIsTermsChecked(!isTermsChecked)} style={{ marginRight: 10 }}>
-                               <MaterialIcons name={isTermsChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
-                            </TouchableOpacity>
-                            <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
-                               <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'terms'})}>Kullanıcı Sözleşmesi</Text>'ni okudum ve kabul ediyorum.
-                            </Text>
-                         </View>
-                         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                            <TouchableOpacity onPress={() => setIsKvkkChecked(!isKvkkChecked)} style={{ marginRight: 10 }}>
-                               <MaterialIcons name={isKvkkChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
-                            </TouchableOpacity>
-                            <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
-                               <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'kvkk'})}>KVKK Aydınlatma ve Açık Rıza Metni</Text>'ni okudum, anladım ve kabul ediyorum.
-                            </Text>
-                         </View>
-                      </View>
-                    )}
+                        {/* Legal Checkboxes */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                           <TouchableOpacity onPress={() => setIsTermsChecked(!isTermsChecked)} style={{ marginRight: 10 }}>
+                              <MaterialIcons name={isTermsChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
+                           </TouchableOpacity>
+                           <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
+                              <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'terms'})}>Kullanıcı Sözleşmesi</Text>'ni okudum ve kabul ediyorum.
+                           </Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                           <TouchableOpacity onPress={() => setIsKvkkChecked(!isKvkkChecked)} style={{ marginRight: 10 }}>
+                              <MaterialIcons name={isKvkkChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
+                           </TouchableOpacity>
+                           <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
+                              <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'kvkk'})}>KVKK Aydınlatma ve Açık Rıza Metni</Text>'ni okudum, anladım ve kabul ediyorum.
+                           </Text>
+                        </View>
+                    </View>
 
-                    <TouchableOpacity
-                      style={[styles.connectButton, isConnecting && { opacity: 0.7 }]}
-                      onPress={authStatus === 'not_found' ? registerUser : handleLoginClick}
-                      disabled={isConnecting}
-                    >
-                      {isConnecting ? (
-                        <ActivityIndicator color="#ffffff" />
-                      ) : (
-                        <Text style={styles.connectButtonText}>{authStatus === 'not_found' ? 'Kayıt Ol' : 'Giriş Yap'}</Text>
-                      )}
+                    <TouchableOpacity style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} onPress={registerUser} disabled={isConnecting}>
+                      {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Kayıt Ol</Text>}
                     </TouchableOpacity>
+
+                    <View style={{ marginTop: 20, alignItems: 'center' }}>
+                      <Text style={{ color: '#ccc', fontSize: 14 }}>Zaten hesabın var mı?</Text>
+                      <TouchableOpacity onPress={() => setAuthMode('login')} style={{ marginTop: 10 }}>
+                        <Text style={{ color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }}>Giriş Yap</Text>
+                      </TouchableOpacity>
+                    </View>
                   </>
                 )}
               </Animated.View>
