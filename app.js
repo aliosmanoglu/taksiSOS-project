@@ -531,7 +531,6 @@ io.on('connection', (socket) => {
                     isCreator: false
                 });
             }
-        }
     });
 
     socket.on('leave_sos_room', (room) => {
