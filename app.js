@@ -220,6 +220,39 @@ app.get('/api/sos-archives', async (req, res) => {
     }
 });
 
+app.get('/api/admin/users', async (req, res) => {
+    try {
+        const snapshot = await db.collection('users').get();
+        let usersList = [];
+        snapshot.forEach(doc => usersList.push({ id: doc.id, ...doc.data() }));
+        res.json(usersList);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/admin/user/:phone', async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        const userDoc = await db.collection('users').doc(phone).get();
+        if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+        
+        let userData = userDoc.data();
+        
+        // Find archives where the user is the creator
+        const sosSnapshot = await db.collection('sos_archives').where('userPhone', '==', phone).get();
+        let sosHistory = [];
+        sosSnapshot.forEach(doc => sosHistory.push({ id: doc.id, ...doc.data() }));
+        
+        // Sort in memory to avoid composite index requirement
+        sosHistory.sort((a, b) => b.startTime - a.startTime);
+
+        res.json({ user: userData, sosHistory });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 const io = new Server(server, {
     cors: {
         origin: "*"
@@ -419,6 +452,7 @@ io.on('connection', (socket) => {
         activeArchives[roomName] = {
             id: roomName + "_" + Date.now(),
             startTime: Date.now(),
+            userPhone: user.phone,
             creator: { name: user.name, phone: user.phone, plate: user.plate, id: user.id },
             helpers: [],
             messages: [],
