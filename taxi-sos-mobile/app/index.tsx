@@ -129,7 +129,10 @@ export default function App() {
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isCameraScanning, setIsCameraScanning] = useState(false);
+  const [isCardDetected, setIsCardDetected] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
   const [isKvkkChecked, setIsKvkkChecked] = useState(false);
@@ -616,7 +619,8 @@ export default function App() {
   };
 
   const registerUser = async () => {
-    if (!name || !plate || !phone || !password || !imageBase64) return Alert.alert('Uyarı', 'Tüm alanları ve fotoğrafı doldurun.');
+    if (!name || !plate || !phone || !password || !passwordConfirm || !imageBase64) return Alert.alert('Uyarı', 'Tüm alanları ve fotoğrafı doldurun.');
+    if (password !== passwordConfirm) return Alert.alert('Uyarı', 'Şifreler birbiriyle uyuşmuyor.');
     if (!isKvkkChecked || !isTermsChecked) return Alert.alert('Uyarı', 'Kayıt olmak için Kullanıcı Sözleşmesi ve KVKK metnini onaylamanız gerekmektedir.');
     setIsConnecting(true);
     try {
@@ -657,7 +661,7 @@ export default function App() {
         setPlate(data.user.plate);
         await AsyncStorage.setItem('user_token', data.token);
         await AsyncStorage.setItem('user_credentials', JSON.stringify({ name: data.user.name, plate: data.user.plate, phone, password, serverIp }));
-        handleConnect();
+        // handleConnect() is removed, useEffect will trigger automatically when name and plate update!
       } else if (data.status === 'not_found') {
         Alert.alert('Hata', 'Bu telefon numarasıyla kayıtlı bir hesap bulunamadı.');
       } else if (data.error) {
@@ -1170,12 +1174,28 @@ export default function App() {
           if (photo && photo.base64) {
             setImageBase64(photo.base64);
             setIsCameraScanning(false);
+            setIsCardDetected(false); // reset
           }
         } catch (e) {
           Alert.alert('Hata', 'Fotoğraf çekilemedi');
         }
       }
     };
+
+    useEffect(() => {
+      if (isCameraScanning && cameraPermission?.granted) {
+        // Fake card detection after 2 seconds
+        const timer = setTimeout(() => {
+          setIsCardDetected(true);
+          setTimeout(() => {
+            takePicture();
+          }, 1500); // takes picture 1.5s after turning green
+        }, 2000);
+        return () => clearTimeout(timer);
+      } else {
+        setIsCardDetected(false);
+      }
+    }, [isCameraScanning, cameraPermission]);
 
     if (isCameraScanning) {
       if (!cameraPermission?.granted) {
@@ -1192,8 +1212,10 @@ export default function App() {
           <CameraView style={{ flex: 1 }} facing="back" ref={cameraRef}>
             <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
                {/* Kredi kartı/ehliyet çerçevesi */}
-               <View style={{ width: Dimensions.get('window').width * 0.85, height: 220, borderWidth: 3, borderColor: '#00ff00', borderRadius: 10, backgroundColor: 'transparent' }} />
-               <Text style={{ color: '#fff', marginTop: 20, fontSize: 16, textAlign: 'center' }}>Lütfen şoför kartınızı çerçevenin içine yerleştirin</Text>
+               <View style={{ width: Dimensions.get('window').width * 0.85, height: 220, borderWidth: 4, borderColor: isCardDetected ? '#00ff00' : '#ffffff', borderRadius: 10, backgroundColor: 'transparent' }} />
+               <Text style={{ color: isCardDetected ? '#00ff00' : '#fff', marginTop: 20, fontSize: 16, textAlign: 'center', fontWeight: 'bold' }}>
+                  {isCardDetected ? 'Kart Algılandı! Fotoğraf Çekiliyor...' : 'Lütfen şoför kartınızı çerçevenin içine yerleştirin'}
+               </Text>
             </View>
             <View style={{ position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center', flexDirection: 'row', justifyContent: 'space-around' }}>
               <TouchableOpacity onPress={() => setIsCameraScanning(false)} style={{ padding: 15, backgroundColor: '#333', borderRadius: 10 }}>
@@ -1262,7 +1284,12 @@ export default function App() {
                 {(authStatus === null || authStatus === 'not_found') && authMode === 'login' && (
                   <>
                     <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
-                    <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Şifre" secureTextEntry placeholderTextColor="#999" />
+                    <View style={{ width: '100%', flexDirection: 'row', alignItems: 'center' }}>
+                      <TextInput style={[styles.input, { flex: 1 }]} value={password} onChangeText={setPassword} placeholder="Şifre" secureTextEntry={!showPassword} placeholderTextColor="#999" />
+                      <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 15, top: 15 }}>
+                         <MaterialIcons name={showPassword ? "visibility-off" : "visibility"} size={24} color="#999" />
+                      </TouchableOpacity>
+                    </View>
                     
                     <TouchableOpacity style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} onPress={handleLoginClick} disabled={isConnecting}>
                       {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Giriş Yap</Text>}
@@ -1282,7 +1309,15 @@ export default function App() {
                     <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
                     <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
                     <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
-                    <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Şifre Belirleyin" secureTextEntry placeholderTextColor="#999" />
+                    
+                    <View style={{ width: '100%', flexDirection: 'row', alignItems: 'center' }}>
+                      <TextInput style={[styles.input, { flex: 1 }]} value={password} onChangeText={setPassword} placeholder="Şifre Belirleyin" secureTextEntry={!showPassword} placeholderTextColor="#999" />
+                      <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 15, top: 15 }}>
+                         <MaterialIcons name={showPassword ? "visibility-off" : "visibility"} size={24} color="#999" />
+                      </TouchableOpacity>
+                    </View>
+                    
+                    <TextInput style={styles.input} value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Şifreyi Tekrar Girin" secureTextEntry={!showPassword} placeholderTextColor="#999" />
                     
                     <View style={{ marginTop: 10, marginBottom: 20 }}>
                         <Text style={{ color: '#ff3b30', fontSize: 13, marginBottom: 10, textAlign: 'center' }}>Lütfen Şoför Tanıtım Kartınızı yükleyin.</Text>
@@ -1322,7 +1357,7 @@ export default function App() {
                         </View>
                     </View>
 
-                    <TouchableOpacity style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} onPress={registerUser} disabled={isConnecting}>
+                    <TouchableOpacity style={[styles.connectButton, { backgroundColor: '#ff3b30' }, isConnecting && { opacity: 0.7 }]} onPress={registerUser} disabled={isConnecting}>
                       {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Kayıt Ol</Text>}
                     </TouchableOpacity>
 
@@ -1557,7 +1592,11 @@ export default function App() {
               setName("");
               setPlate("");
               setPhone("");
+              setPassword("");
+              setPasswordConfirm("");
               setIsAutoLoginTriggered(false);
+              setAuthStatus(null);
+              setAuthMode('login');
             } catch (e) { }
           }}
         >
