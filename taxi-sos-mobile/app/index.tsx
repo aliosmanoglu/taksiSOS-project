@@ -159,7 +159,12 @@ export default function App() {
     }
   }, [lastNotificationResponse, socket]);
 
+  const isInitialMount = useRef(true);
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     if (activeSOSRoom) {
       AsyncStorage.setItem('activeSOSRoom', activeSOSRoom).catch(() => { });
     } else {
@@ -785,6 +790,7 @@ export default function App() {
         if (storedRoom) {
           newSocket.emit('join_sos_room', storedRoom);
           setActiveSOSRoom(storedRoom); // Geri döndüğünde state'e de set et
+          setPageMode('room'); // Otomatik olarak SOS odası arayüzüne geçir
         }
       }).catch(() => { });
       addLog(`✅ Bağlanıldı: ${name}`);
