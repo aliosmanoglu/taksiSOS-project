@@ -19,7 +19,9 @@
           "audio",
           "fetch"
         ],
-        "NSPhotoLibraryUsageDescription": "Acil durum veya profil için fotoğraf kütüphanesine erişim gereklidir."
+        "NSPhotoLibraryUsageDescription": "Acil durum veya profil için fotoğraf kütüphanesine erişim gereklidir.",
+        "NSLocationWhenInUseUsageDescription": "Size en yakın acil durum çağrılarını görebilmeniz için konumunuza ihtiyacımız var.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Uygulama arka plandayken SOS gönderenleri takip edebilmek için konum izni gereklidir."
       }
     },
     "android": {
@@ -70,6 +72,12 @@
         {
           "photosPermission": "Şoför tanıtım kartı seçimi için galeri izni gereklidir.",
           "cameraPermission": "Şoför tanıtım kartı fotoğrafı çekmek için kamera izni gereklidir."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Acil durumlarda (SOS) diğer şoförlerin konumunuzu görebilmesi için konumunuza izin vermeniz gerekmektedir."
         }
       ]
     ],

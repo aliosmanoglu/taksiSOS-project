@@ -375,10 +375,45 @@ diff --git a/node_modules/react-native-live-audio-stream/android/build/tmp/compi
 new file mode 100644
 index 0000000..253de70
 Binary files /dev/null and b/node_modules/react-native-live-audio-stream/android/build/tmp/compileDebugJavaWithJavac/previous-compilation-data.bin differ
+diff --git a/node_modules/react-native-live-audio-stream/android/src/main/java/com/imxiqi/rnliveaudiostream/RNLiveAudioStreamModule.java b/node_modules/react-native-live-audio-stream/android/src/main/java/com/imxiqi/rnliveaudiostream/RNLiveAudioStreamModule.java
+index 20f454f..357f9ca 100644
+--- a/node_modules/react-native-live-audio-stream/android/src/main/java/com/imxiqi/rnliveaudiostream/RNLiveAudioStreamModule.java
++++ b/node_modules/react-native-live-audio-stream/android/src/main/java/com/imxiqi/rnliveaudiostream/RNLiveAudioStreamModule.java
+@@ -40,7 +40,7 @@ public class RNLiveAudioStreamModule extends ReactContextBaseJavaModule {
+     }
+ 
+     @ReactMethod
+-    public void init(ReadableMap options) {
++    public void initializeStream(ReadableMap options) {
+         sampleRateInHz = 44100;
+         if (options.hasKey("sampleRate")) {
+             sampleRateInHz = options.getInt("sampleRate");
+diff --git a/node_modules/react-native-live-audio-stream/index.js b/node_modules/react-native-live-audio-stream/index.js
+index c5968b2..aa61503 100644
+--- a/node_modules/react-native-live-audio-stream/index.js
++++ b/node_modules/react-native-live-audio-stream/index.js
+@@ -4,7 +4,7 @@ const EventEmitter = new NativeEventEmitter(RNLiveAudioStream);
+ 
+ const AudioRecord = {};
+ 
+-AudioRecord.init = options => RNLiveAudioStream.init(options);
++AudioRecord.init = options => RNLiveAudioStream.initializeStream(options);
+ AudioRecord.start = () => RNLiveAudioStream.start();
+ AudioRecord.stop = () => RNLiveAudioStream.stop();
+ 
 diff --git a/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m b/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m
-index a6f2317..5fabadb 100644
+index a6f2317..cd6f6ae 100644
 --- a/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m
 +++ b/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m
+@@ -4,7 +4,7 @@
+ 
+ RCT_EXPORT_MODULE();
+ 
+-RCT_EXPORT_METHOD(init:(NSDictionary *) options) {
++RCT_EXPORT_METHOD(initializeStream:(NSDictionary *) options) {
+     RCTLogInfo(@"[RNLiveAudioStream] init");
+     _recordState.mDataFormat.mSampleRate        = options[@"sampleRate"] == nil ? 44100 : [options[@"sampleRate"] doubleValue];
+     _recordState.mDataFormat.mBitsPerChannel    = options[@"bitsPerSample"] == nil ? 16 : [options[@"bitsPerSample"] unsignedIntValue];
 @@ -31,11 +31,12 @@ RCT_EXPORT_METHOD(start) {
          success = [audioSession setCategory: AVAudioSessionCategoryPlayAndRecord
                                         mode: AVAudioSessionModeVoiceChat
