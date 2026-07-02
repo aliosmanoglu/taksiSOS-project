@@ -90,9 +90,42 @@ export default function UsersList({ serverIp, onSelectArchive }: { serverIp: str
                                 <div style={{ flex: 1 }}>
                                     <div style={{ fontWeight: 'bold', fontSize: '15px', marginBottom: '2px' }}>{u.name}</div>
                                     <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>{u.plate} • {u.phone}</div>
-                                    <div style={{ marginTop: '5px', fontSize: '12px', fontWeight: 'bold', color: u.status === 'approved' ? 'var(--success-color)' : u.status === 'rejected' ? 'var(--danger-color)' : 'var(--warning-color)' }}>
-                                        {u.status === 'approved' ? 'Onaylı' : u.status === 'rejected' ? 'Reddedildi' : 'Bekliyor'}
+                                    <div style={{ marginTop: '5px', fontSize: '12px', fontWeight: 'bold', color: u.status === 'approved' ? 'var(--success-color)' : (u.status === 'rejected' || u.status === 'banned') ? 'var(--danger-color)' : 'var(--warning-color)' }}>
+                                        {u.status === 'approved' ? 'Onaylı' : u.status === 'rejected' ? 'Reddedildi' : u.status === 'banned' ? 'Engellendi' : 'Bekliyor'}
                                     </div>
+                                </div>
+                                
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    {u.status !== 'banned' && (
+                                        <button 
+                                            className="glass-button" 
+                                            style={{ padding: '6px 12px', fontSize: '11px', backgroundColor: 'rgba(255, 59, 48, 0.2)', border: '1px solid rgba(255, 59, 48, 0.4)', color: '#ff3b30' }}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if(window.confirm("Bu kullanıcıyı sistemden ENGELLEMEK istediğinize emin misiniz?")) {
+                                                    fetch(`${serverIp.replace(/\/$/, '')}/api/admin/ban-user`, {
+                                                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: u.phone })
+                                                    }).then(fetchUsers);
+                                                }
+                                            }}
+                                        >
+                                            Engelle
+                                        </button>
+                                    )}
+                                    <button 
+                                        className="glass-button" 
+                                        style={{ padding: '6px 12px', fontSize: '11px', backgroundColor: 'rgba(0, 0, 0, 0.4)', color: 'var(--text-secondary)' }}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if(window.confirm("Bu kullanıcıyı veritabanından TAMAMEN SİLMEK istediğinize emin misiniz?")) {
+                                                fetch(`${serverIp.replace(/\/$/, '')}/api/admin/delete-user`, {
+                                                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: u.phone })
+                                                }).then(fetchUsers);
+                                            }
+                                        }}
+                                    >
+                                        Sil
+                                    </button>
                                 </div>
                             </div>
                         ))}

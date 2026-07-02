@@ -207,6 +207,61 @@ app.post('/api/admin/reject-user', async (req, res) => {
     }
 });
 
+app.post('/api/admin/ban-user', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        const userDoc = await db.collection('users').doc(phone).get();
+        if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+        
+        const userData = userDoc.data();
+
+        if (userData.idCardUrl) {
+            try {
+                const urlParts = userData.idCardUrl.split('/');
+                const fileName = urlParts.slice(urlParts.indexOf(bucket.name) + 1).join('/');
+                await bucket.file(fileName).delete();
+            } catch (err) {
+                console.error('Failed to delete image:', err);
+            }
+        }
+
+        await db.collection('users').doc(phone).update({
+            status: 'banned',
+            idCardUrl: null
+        });
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/admin/delete-user', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        const userDoc = await db.collection('users').doc(phone).get();
+        if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
+        
+        const userData = userDoc.data();
+
+        if (userData.idCardUrl) {
+            try {
+                const urlParts = userData.idCardUrl.split('/');
+                const fileName = urlParts.slice(urlParts.indexOf(bucket.name) + 1).join('/');
+                await bucket.file(fileName).delete();
+            } catch (err) {
+                console.error('Failed to delete image:', err);
+            }
+        }
+
+        await db.collection('users').doc(phone).delete();
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 let activeArchives = {};
 
 app.get('/api/sos-archives', async (req, res) => {

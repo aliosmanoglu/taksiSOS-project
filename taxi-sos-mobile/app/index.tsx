@@ -1188,6 +1188,13 @@ export default function App() {
                     </TouchableOpacity>
                   </View>
                 )}
+                {authStatus === 'banned' && (
+                  <View style={{ alignItems: 'center', marginTop: 20 }}>
+                    <MaterialIcons name="block" size={60} color="#ff3b30" />
+                    <Text style={{ color: '#fff', fontSize: 18, marginTop: 15, textAlign: 'center', fontWeight: 'bold' }}>Hesabınız Engellendi</Text>
+                    <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Sistem yöneticileri tarafından uygulamaya erişiminiz kalıcı olarak engellenmiştir.</Text>
+                  </View>
+                )}
                 {(authStatus === null || authStatus === 'not_found') && (
                   <>
                     <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />

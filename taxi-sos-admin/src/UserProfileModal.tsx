@@ -61,9 +61,9 @@ export default function UserProfileModal({ serverIp, phone, onClose, onSelectArc
                                         <strong>Durum: </strong> 
                                         <span style={{ 
                                             color: userData.status === 'approved' ? 'var(--success-color)' : 
-                                                   userData.status === 'rejected' ? 'var(--danger-color)' : 'var(--warning-color)' 
+                                                   (userData.status === 'rejected' || userData.status === 'banned') ? 'var(--danger-color)' : 'var(--warning-color)' 
                                         }}>
-                                            {userData.status === 'approved' ? 'Onaylı' : userData.status === 'rejected' ? 'Reddedildi' : 'Bekliyor'}
+                                            {userData.status === 'approved' ? 'Onaylı' : userData.status === 'rejected' ? 'Reddedildi' : userData.status === 'banned' ? 'Engellendi' : 'Bekliyor'}
                                         </span>
                                     </div>
                                 </div>
