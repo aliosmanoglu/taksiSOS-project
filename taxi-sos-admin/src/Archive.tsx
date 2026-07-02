@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Archive as ArchiveIcon, Clock, User, Phone, Play, Pause, FileText, AlertCircle, Calendar, Users } from 'lucide-react';
+import { Archive as ArchiveIcon, Clock, User, Phone, Play, Pause, FileText, AlertCircle, Calendar, Users, Search } from 'lucide-react';
 import LocationSimulation from './LocationSimulation';
+import UserProfileModal from './UserProfileModal';
 
 const CustomAudioPlayer = ({ audioUrl, duration }: { audioUrl: string, duration: number }) => {
     const audioRef = useRef<HTMLAudioElement>(null);
@@ -94,10 +95,20 @@ const CustomAudioPlayer = ({ audioUrl, duration }: { audioUrl: string, duration:
     );
 };
 
-export default function Archive({ serverIp }: { serverIp: string }) {
+export default function Archive({ serverIp, initialArchive }: { serverIp: string, initialArchive?: any }) {
     const [archives, setArchives] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedArchive, setSelectedArchive] = useState<any>(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+    const [selectedUserPhone, setSelectedUserPhone] = useState<string | null>(null);
+
+    useEffect(() => {
+        if(initialArchive) {
+            setSelectedArchive(initialArchive);
+        }
+    }, [initialArchive]);
 
     const fetchArchives = async () => {
         setLoading(true);
@@ -141,6 +152,25 @@ export default function Archive({ serverIp }: { serverIp: string }) {
         return `${mins} dk ${secs} sn`;
     };
 
+    const filteredArchives = archives.filter(arch => {
+        let match = true;
+        if (searchQuery) {
+            const query = searchQuery.toLowerCase();
+            const nameMatch = arch.creator?.name?.toLowerCase().includes(query);
+            const plateMatch = arch.creator?.plate?.toLowerCase().includes(query);
+            if (!nameMatch && !plateMatch) match = false;
+        }
+        if (startDate) {
+            if (new Date(arch.startTime) < new Date(startDate)) match = false;
+        }
+        if (endDate) {
+            const end = new Date(endDate);
+            end.setHours(23, 59, 59, 999);
+            if (new Date(arch.startTime) > end) match = false;
+        }
+        return match;
+    });
+
     return (
         <div style={{ display: 'flex', gap: '20px', flex: 1, minHeight: 0 }}>
             {/* Archive List Sidebar */}
@@ -151,12 +181,45 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                     </div>
                     <button className="glass-button" onClick={fetchArchives} style={{ padding: '5px 10px', fontSize: '12px' }}>Yenile</button>
                 </div>
+
+                {/* Filters */}
+                <div style={{ padding: '15px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div style={{ position: 'relative' }}>
+                        <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+                        <input 
+                            type="text" 
+                            placeholder="İsim veya plaka ile ara..." 
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            style={{ 
+                                width: '100%', padding: '8px 8px 8px 30px', borderRadius: '6px', 
+                                border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.05)',
+                                color: 'white', fontSize: '13px'
+                            }}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <input 
+                            type="date" 
+                            value={startDate}
+                            onChange={(e) => setStartDate(e.target.value)}
+                            style={{ flex: 1, padding: '6px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.05)', color: 'white', fontSize: '12px' }}
+                        />
+                        <input 
+                            type="date" 
+                            value={endDate}
+                            onChange={(e) => setEndDate(e.target.value)}
+                            style={{ flex: 1, padding: '6px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.05)', color: 'white', fontSize: '12px' }}
+                        />
+                    </div>
+                </div>
+
                 <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
                     {loading && <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>Yükleniyor...</div>}
-                    {!loading && archives.length === 0 && (
+                    {!loading && filteredArchives.length === 0 && (
                         <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-secondary)' }}>Kayıtlı çağrı bulunamadı.</div>
                     )}
-                    {archives.map(arch => (
+                    {filteredArchives.map(arch => (
                         <div
                             key={arch.id}
                             onClick={() => setSelectedArchive(arch)}
@@ -195,7 +258,10 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                 ) : (
                     <>
                         <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', background: 'rgba(248, 81, 73, 0.1)' }}>
-                            <h2 style={{ fontSize: '20px', margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <h2 
+                                style={{ fontSize: '20px', margin: '0 0 10px 0', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', textDecoration: 'underline' }}
+                                onClick={() => setSelectedUserPhone(selectedArchive.creator?.phone)}
+                            >
                                 <AlertCircle color="var(--danger-color)" />
                                 {selectedArchive.creator?.name} - Olay Detayı
                             </h2>
@@ -279,6 +345,15 @@ export default function Archive({ serverIp }: { serverIp: string }) {
                     </>
                 )}
             </div>
+
+            {selectedUserPhone && (
+                <UserProfileModal 
+                    serverIp={serverIp} 
+                    phone={selectedUserPhone} 
+                    onClose={() => setSelectedUserPhone(null)} 
+                    onSelectArchive={(arch: any) => setSelectedArchive(arch)}
+                />
+            )}
         </div>
     );
 }

@@ -3,9 +3,10 @@ import { io, Socket } from 'socket.io-client';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { LogOut, AlertTriangle, Users, Map as MapIcon, Car, Archive as ArchiveIcon, UserCheck } from 'lucide-react';
+import { LogOut, AlertTriangle, Users, Map as MapIcon, Car, Archive as ArchiveIcon, UserCheck, List } from 'lucide-react';
 import Archive from './Archive';
 import Approvals from './Approvals';
+import UsersList from './UsersList';
 
 // Custom Map Markers
 const createCustomIcon = (color: string, isSOS: boolean = false) => {
@@ -52,7 +53,8 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [serverIp, setServerIp] = useState('https://taksisos-project.onrender.com');
-  const [activeTab, setActiveTab] = useState<'live' | 'archive' | 'approvals'>('live');
+  const [activeTab, setActiveTab] = useState<'live' | 'archive' | 'approvals' | 'usersList'>('live');
+  const [selectedArchiveFromUsers, setSelectedArchiveFromUsers] = useState<any>(null);
   
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -180,6 +182,13 @@ function App() {
                 <ArchiveIcon size={14} /> SOS Arşivi
              </button>
              <button 
+                className={`glass-button ${activeTab === 'usersList' ? 'primary' : ''}`} 
+                onClick={() => setActiveTab('usersList')}
+                style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px', fontSize: '14px' }}
+             >
+                <List size={14} /> Kullanıcı Listesi
+             </button>
+             <button 
                 className={`glass-button ${activeTab === 'approvals' ? 'primary' : ''}`} 
                 onClick={() => setActiveTab('approvals')}
                 style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px', fontSize: '14px' }}
@@ -215,7 +224,15 @@ function App() {
       {/* Main Panel */}
       <div className="main-content">
         {activeTab === 'archive' ? (
-          <Archive serverIp={serverIp} />
+          <Archive serverIp={serverIp} initialArchive={selectedArchiveFromUsers} />
+        ) : activeTab === 'usersList' ? (
+          <UsersList 
+             serverIp={serverIp} 
+             onSelectArchive={(arch) => {
+                 setSelectedArchiveFromUsers(arch);
+                 setActiveTab('archive');
+             }} 
+          />
         ) : activeTab === 'approvals' ? (
           <Approvals serverIp={serverIp} />
         ) : (
