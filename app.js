@@ -257,6 +257,10 @@ app.get('/', (req, res) => {
 
 
 io.use(async (socket, next) => {
+    if (socket.handshake.auth.adminPassword === (process.env.ADMIN_PASSWORD || 'admin')) {
+        socket.isAdmin = true;
+        return next();
+    }
     const token = socket.handshake.auth.token;
     if (!token) {
         return next(new Error('Authentication error'));

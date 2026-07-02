@@ -74,7 +74,11 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const newSocket = io(serverIp);
+    const newSocket = io(serverIp, {
+      auth: {
+        adminPassword: passwordInput
+      }
+    });
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
