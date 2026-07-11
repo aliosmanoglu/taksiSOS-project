@@ -1421,6 +1421,19 @@ export default function App() {
                     <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Sistem yöneticileri tarafından uygulamaya erişiminiz kalıcı olarak engellenmiştir.</Text>
                   </View>
                 )}
+                {authStatus === 'approved' && (
+                  <View style={{ alignItems: 'center', marginTop: 20 }}>
+                    <MaterialIcons name="wifi-off" size={60} color="#ff3b30" />
+                    <Text style={{ color: '#fff', fontSize: 18, marginTop: 15, textAlign: 'center', fontWeight: 'bold' }}>Bağlantı Koptu</Text>
+                    <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Sunucuya bağlanılamıyor veya internet bağlantınız yok.</Text>
+                    <TouchableOpacity style={[styles.connectButton, { marginTop: 30 }]} onPress={() => handleConnect(name, plate, phone, accessToken)}>
+                      <Text style={styles.connectButtonText}>Yeniden Bağlan</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={{ marginTop: 20 }} onPress={() => setAuthStatus(null)}>
+                      <Text style={{ color: '#ff3b30', fontSize: 16 }}>Farklı Hesaba Geç</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
                 {(authStatus === null || authStatus === 'not_found') && authMode === 'login' && (
                   <>
                     <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
