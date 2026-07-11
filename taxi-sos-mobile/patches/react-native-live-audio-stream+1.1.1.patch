@@ -402,7 +402,7 @@ index c5968b2..aa61503 100644
  AudioRecord.stop = () => RNLiveAudioStream.stop();
  
 diff --git a/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m b/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m
-index a6f2317..cd6f6ae 100644
+index a6f2317..de1ff08 100644
 --- a/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m
 +++ b/node_modules/react-native-live-audio-stream/ios/RNLiveAudioStream.m
 @@ -4,7 +4,7 @@
@@ -428,3 +428,18 @@ index a6f2317..cd6f6ae 100644
          success = [audioSession setMode: AVAudioSessionModeVoiceChat error: &error] && success;
      }
      if (!success || error != nil) {
+@@ -95,6 +96,14 @@ void HandleInputBuffer(void *inUserData,
+     return @[@"data"];
+ }
+ 
++- (void)startObserving {
++    // Has to be implemented for new architecture
++}
++
++- (void)stopObserving {
++    // Has to be implemented for new architecture
++}
++
+ - (void)dealloc {
+     RCTLogInfo(@"[RNLiveAudioStream] dealloc");
+     AudioQueueDispose(_recordState.mQueue, true);
