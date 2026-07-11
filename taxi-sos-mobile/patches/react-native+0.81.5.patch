@@ -1,0 +1,16 @@
+diff --git a/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm b/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm
+index 2a67797..fc92915 100644
+--- a/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm
++++ b/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm
+@@ -435,7 +435,10 @@ void ObjCTurboModule::performVoidMethodInvocation(
+     @try {
+       [inv invokeWithTarget:strongModule];
+     } @catch (NSException *exception) {
+-      throw convertNSExceptionToJSError(runtime, exception, std::string{moduleName}, methodNameStr);
++      // In New Architecture, throwing a C++ exception inside a GCD dispatch_async block
++      // will cause std::terminate to abort the process. Instead, we log the exact module and method.
++      RCTLogError(@"[TurboModule Error] %s.%s threw an exception: %@", moduleName, methodNameStr.c_str(), exception);
++      // throw convertNSExceptionToJSError(runtime, exception, std::string{moduleName}, methodNameStr);
+     } @finally {
+       [retainedObjectsForInvocation removeAllObjects];
+     }

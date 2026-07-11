@@ -80,7 +80,8 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Acil durumlarda (SOS) diğer şoförlerin konumunuzu görebilmesi için konumunuza izin vermeniz gerekmektedir."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

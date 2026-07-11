@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image, ActivityIndicator, Easing } from 'react-native';
+import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image, ActivityIndicator, Easing, AppState } from 'react-native';
 
 // --- Hata ve Uyarı Gizleme ---
 LogBox.ignoreLogs([
@@ -33,6 +33,9 @@ try {
 
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
+import * as Network from 'expo-network';
+import { jwtDecode } from 'jwt-decode';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Device from 'expo-device';
@@ -137,8 +140,9 @@ export default function App() {
   const [isAutoLoginTriggered, setIsAutoLoginTriggered] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
-  const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [isCameraScanning, setIsCameraScanning] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
@@ -494,41 +498,62 @@ export default function App() {
     const loadCredentials = async () => {
       let hasCredentials = false;
       try {
-        const storedData = await AsyncStorage.getItem('user_credentials');
-        if (storedData) {
-          const data = JSON.parse(storedData);
-          const storedRoom = await AsyncStorage.getItem('activeSOSRoom');
-          if (storedRoom) {
-            setActiveSOSRoom(storedRoom);
-            setPageMode('room');
-            if (storedRoom === "sos_room_" + data.phone) {
-              setSosActive(true);
-            }
-          }
-          if (data.name) setName(data.name);
-          if (data.plate) setPlate(data.plate);
-          if (data.phone) setPhone(data.phone);
-
-          if (data.name && data.plate && data.phone) {
-            hasCredentials = true;
-          }
-        } else {
-          // Eski FileSystem verisi varsa AsyncStorage'a taşı
+        // MIGRATION: Eski şifresiz verileri tamamen sil
+        try {
+          await AsyncStorage.removeItem('user_credentials');
+          await AsyncStorage.removeItem('user_token');
           const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
           const fileInfo = await FileSystem.getInfoAsync(credentialsPath);
           if (fileInfo.exists) {
-            const content = await FileSystem.readAsStringAsync(credentialsPath);
-            const data = JSON.parse(content);
-            if (data.name) setName(data.name);
-            if (data.plate) setPlate(data.plate);
-            if (data.phone) setPhone(data.phone);
-            await AsyncStorage.setItem('user_credentials', content);
+            await FileSystem.deleteAsync(credentialsPath, { idempotent: true });
+          }
+        } catch (e) {
+          console.log("Migration hatası (Önemli olmayabilir, ancak takip için kaydedildi):", e);
+        }
 
-            if (data.name && data.plate && data.phone) {
+        // AĞ KONTROLÜ
+        const networkState = await Network.getNetworkStateAsync();
+        if (!networkState.isConnected) {
+          Alert.alert("Bağlantı Hatası", "İnternet bağlantısı yok. Lütfen bağlantınızı kontrol edip tekrar deneyin.");
+          setIsCheckingAuth(false);
+          setIsAutoLoginTriggered(true);
+          return;
+        }
+
+        const storedRoom = await AsyncStorage.getItem('activeSOSRoom');
+        if (storedRoom) {
+          setActiveSOSRoom(storedRoom);
+          setPageMode('room');
+          // offline mode sos aktif mi bilemiyoruz tam ama kalsın
+        }
+
+        const refreshToken = await SecureStore.getItemAsync('refreshToken');
+        if (refreshToken) {
+          try {
+            const res = await fetch(`${SERVER_URL}/api/refresh`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ refreshToken })
+            });
+            const data = await res.json();
+            if (data.accessToken) {
+              const decoded: any = jwtDecode(data.accessToken);
+              setName(decoded.name);
+              setPlate(decoded.plate);
+              setPhone(decoded.phone);
+              setAuthStatus(decoded.status);
+              setAccessToken(data.accessToken);
               hasCredentials = true;
+
+              if (storedRoom === "sos_room_" + decoded.phone) {
+                setSosActive(true);
+              }
             }
+          } catch (fetchErr) {
+            console.log("Token yenileme başarısız", fetchErr);
           }
         }
+
       } catch (err) {
         console.log("Kimlik bilgileri yüklenirken hata oluştu:", err);
       } finally {
@@ -540,6 +565,54 @@ export default function App() {
     };
     loadCredentials();
   }, []);
+
+  // --- SILENT BACKGROUND REFRESH ---
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    
+    const refreshTokenIfNeeded = async () => {
+      const currentRefreshToken = await SecureStore.getItemAsync('refreshToken');
+      if (!currentRefreshToken || !accessToken) return;
+      
+      try {
+        const decoded: any = jwtDecode(accessToken);
+        const currentTime = Date.now() / 1000;
+        
+        // Eğer token süresinin bitmesine 10 dakikadan az kalmışsa yenile
+        if (decoded.exp && decoded.exp - currentTime < 600) {
+          const res = await fetch(`${SERVER_URL}/api/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken: currentRefreshToken })
+          });
+          const data = await res.json();
+          if (data.accessToken) {
+            setAccessToken(data.accessToken);
+            if (socket && socket.connected) {
+              socket.emit('update_token', data.accessToken);
+            }
+          }
+        }
+      } catch (e) {
+        console.log("Arka plan yenileme hatası:", e);
+      }
+    };
+
+    // Her 5 dakikada bir kontrol et (ön plandayken)
+    interval = setInterval(refreshTokenIfNeeded, 5 * 60 * 1000);
+
+    // Arka plandan ön plana geçişleri dinle
+    const appStateSub = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        refreshTokenIfNeeded();
+      }
+    });
+
+    return () => {
+      clearInterval(interval);
+      appStateSub.remove();
+    };
+  }, [accessToken, socket]);
 
   useEffect(() => {
     if (sosActive) {
@@ -640,7 +713,6 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         setAuthStatus('pending');
-        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, password, serverIp }));
         Alert.alert('Başarılı', 'Kayıt talebiniz alındı. Yöneticiler tarafından onaylandığında giriş yapabileceksiniz.');
       } else {
         Alert.alert('Hata', data.error || 'Kayıt başarısız.');
@@ -666,9 +738,15 @@ export default function App() {
         setAuthStatus('approved');
         setName(data.user.name);
         setPlate(data.user.plate);
-        await AsyncStorage.setItem('user_token', data.token);
-        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name: data.user.name, plate: data.user.plate, phone, password, serverIp }));
-        handleConnect();
+        setAccessToken(data.accessToken);
+        
+        await SecureStore.setItemAsync('refreshToken', data.refreshToken);
+        
+        // Remove old style local storage
+        await AsyncStorage.removeItem('user_credentials');
+        await AsyncStorage.removeItem('user_token');
+
+        handleConnect(data.user.name, data.user.plate, phone, data.accessToken);
       } else if (data.status === 'not_found') {
         Alert.alert('Hata', 'Bu telefon numarasıyla kayıtlı bir hesap bulunamadı.');
       } else if (data.error) {
@@ -685,30 +763,29 @@ export default function App() {
     }
   };
 
-  const handleConnect = async () => {
-    const storedToken = await AsyncStorage.getItem('user_token');
-    if (!storedToken) {
-       Alert.alert("Hata", "Oturum süresi dolmuş veya token bulunamadı.");
+  const handleConnect = async (connectName = name, connectPlate = plate, connectPhone = phone, currentToken = accessToken) => {
+    if (!currentToken) {
+       Alert.alert("Hata", "Oturum süresi dolmuş veya token bulunamadı. Lütfen tekrar giriş yapın.");
        return;
     }
-    if (!name || !plate || !phone) {
+    if (!connectName || !connectPlate || !connectPhone) {
       Alert.alert('Uyarı', 'Lütfen tüm alanları doldurun.');
       return;
     }
 
     const nameRegex = /^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]{3,}$/;
-    if (!nameRegex.test(name.trim())) {
+    if (!nameRegex.test(connectName.trim())) {
       Alert.alert('Uyarı', 'Lütfen geçerli bir isim soyisim giriniz (Sadece harfler ve en az 3 karakter).');
       return;
     }
 
     const phoneRegex = /^(05|5)[0-9]{9}$/;
-    if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
+    if (!phoneRegex.test(connectPhone.replace(/\s/g, ''))) {
       Alert.alert('Uyarı', 'Lütfen geçerli bir telefon numarası giriniz (Örn: 05xx veya 5xx ile başlayan 10-11 haneli numara).');
       return;
     }
 
-    const plateClean = plate.replace(/\s/g, '');
+    const plateClean = connectPlate.replace(/\s/g, '');
     const plateRegex = /^34T[A-Z0-9]{2,6}$/i;
     if (!plateRegex.test(plateClean)) {
       Alert.alert('Uyarı', 'Lütfen geçerli bir İstanbul Taksi plakası giriniz (Plaka 34 T ile başlamalıdır).');
@@ -791,7 +868,9 @@ export default function App() {
       socket.disconnect();
     }
 
-    const newSocket = io(serverIp, { auth: { token: storedToken } });
+    const newSocket = io(serverIp, {
+      auth: { token: currentToken }
+    });
     let hasConnected = false;
 
     newSocket.on('connect', async () => {
@@ -802,9 +881,9 @@ export default function App() {
       let pushToken = await registerForPushNotificationsAsync();
 
       newSocket.emit('connect_sos', {
-        name: name,
-        plate: plate,
-        phone: phone,
+        name: connectName,
+        plate: connectPlate,
+        phone: connectPhone,
         lat: currentLat,
         lon: currentLon,
         pushToken: pushToken
@@ -817,13 +896,19 @@ export default function App() {
           setPageMode('room'); // Otomatik olarak SOS odası arayüzüne geçir
         }
       }).catch(() => { });
-      addLog(`✅ Bağlanıldı: ${name}`);
+      addLog(`✅ Bağlanıldı: ${connectName}`);
 
-      // Kimlik bilgilerini yerel olarak kaydet
-      try {
-        await AsyncStorage.setItem('user_credentials', JSON.stringify({ name, plate, phone, serverIp }));
-      } catch (err) {
-        console.log("Kimlik bilgileri kaydedilemedi:", err);
+      // Kimlik bilgileri artık AsyncStorage'de SAKLANMIYOR. Sadece SecureStore'daki token var.
+    });
+
+    newSocket.on('disconnect', (reason) => {
+      console.log('Socket koptu:', reason);
+      // Eğer sunucu bizi bilerek kopardıysa (token yenileme başarısızsa) logine at
+      if (reason === 'io server disconnect') {
+        setIsConnected(false);
+        setIsAutoLoginTriggered(false);
+        setAuthStatus(null);
+        Alert.alert("Oturum Kapandı", "Oturum süreniz doldu veya başka bir cihazdan giriş yapıldı.");
       }
     });
 
@@ -837,7 +922,7 @@ export default function App() {
         activeSOS.forEach(sosUser => {
           const roomName = sosUser.activeRoom;
           // Eğer bu odanın bildirimi zaten varsa veya kendi odamızsa ekleme
-          if (!newNotifs.find(n => n.roomName === roomName) && roomName !== "sos_room_" + phone) {
+          if (!newNotifs.find(n => n.roomName === roomName) && roomName !== "sos_room_" + connectPhone) {
             const latDiff = currentLat - sosUser.lat;
             const lonDiff = currentLon - sosUser.lon;
             // Basit kuş uçuşu mesafe formülü
@@ -1618,16 +1703,27 @@ export default function App() {
         <TouchableOpacity
           style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}
           onPress={async () => {
-            if (socket) socket.disconnect();
-            setIsConnected(false);
             try {
-              const credentialsPath = FileSystem.documentDirectory + 'user_credentials.json';
-              await FileSystem.deleteAsync(credentialsPath, { idempotent: true });
-              await AsyncStorage.removeItem('user_credentials');
+              // 1. Sunucu tarafında token versiyonunu artırarak çıkış yap (Token Invalidation)
+              fetch(`${SERVER_URL}/api/logout`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone })
+              }).catch(() => {});
+              
+              if (socket) socket.disconnect();
+              setIsConnected(false);
+              
+              // 2. Güvenli depodaki refresh token'ı sil
+              await SecureStore.deleteItemAsync('refreshToken');
+              
+              // 3. Kalıntıları sil ve state'i sıfırla
               await AsyncStorage.removeItem('activeSOSRoom');
               setName("");
               setPlate("");
               setPhone("");
+              setAccessToken(null);
+              setAuthStatus(null);
               setIsAutoLoginTriggered(false);
             } catch (e) { }
           }}

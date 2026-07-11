@@ -113,6 +113,7 @@ app.post('/api/register', async (req, res) => {
             pushToken,
             idCardUrl,
             status: 'pending',
+            tokenVersion: 1,
             createdAt: Date.now()
         });
 
@@ -145,11 +146,95 @@ app.post('/api/login', async (req, res) => {
         }
 
         if (userData.status === 'approved') {
-            const token = jwt.sign({ phone }, JWT_SECRET); // No expiration
-            return res.json({ status: 'approved', token, user: userData });
+            const tokenVersion = userData.tokenVersion || 1;
+            
+            const accessToken = jwt.sign(
+                { 
+                    phone: userData.phone, 
+                    name: userData.name, 
+                    plate: userData.plate, 
+                    status: userData.status 
+                }, 
+                JWT_SECRET, 
+                { expiresIn: '1h' }
+            );
+
+            const refreshToken = jwt.sign(
+                { 
+                    phone: userData.phone, 
+                    tokenVersion 
+                }, 
+                JWT_SECRET, 
+                { expiresIn: '30d' }
+            );
+
+            // user datası artık frontend'de saklanmayacak ama geriye uyumluluk ve UI için 
+            // ilk login adımında yine de dönebiliriz. (Fakat frontend artık bunu SecureStore'a kaydetmeyecek).
+            return res.json({ status: 'approved', accessToken, refreshToken, user: userData });
         }
 
         res.json({ status: userData.status });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/refresh', async (req, res) => {
+    try {
+        const { refreshToken } = req.body;
+        if (!refreshToken) return res.status(400).json({ error: 'Refresh token eksik' });
+
+        // Verifying the refresh token
+        let decoded;
+        try {
+            decoded = jwt.verify(refreshToken, JWT_SECRET);
+        } catch (e) {
+            return res.status(401).json({ error: 'Geçersiz veya süresi dolmuş refresh token' });
+        }
+
+        // Check if user still exists and tokenVersion matches
+        const userDoc = await db.collection('users').doc(decoded.phone).get();
+        if (!userDoc.exists) {
+            return res.status(401).json({ error: 'Kullanıcı bulunamadı' });
+        }
+
+        const userData = userDoc.data();
+        const currentVersion = userData.tokenVersion || 1;
+
+        if (userData.status !== 'approved' || decoded.tokenVersion !== currentVersion) {
+            return res.status(401).json({ error: 'Oturum geçersiz kılındı veya hesabınız onaylı değil' });
+        }
+
+        // Generate new Access Token
+        const accessToken = jwt.sign(
+            { 
+                phone: userData.phone, 
+                name: userData.name, 
+                plate: userData.plate, 
+                status: userData.status 
+            }, 
+            JWT_SECRET, 
+            { expiresIn: '1h' }
+        );
+
+        res.json({ accessToken });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/logout', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        if (!phone) return res.status(400).json({ error: 'Telefon gerekli' });
+
+        const userDocRef = db.collection('users').doc(phone);
+        const userDoc = await userDocRef.get();
+        if (userDoc.exists) {
+            const currentVersion = userDoc.data().tokenVersion || 1;
+            await userDocRef.update({ tokenVersion: currentVersion + 1 });
+        }
+        res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -389,6 +474,23 @@ io.use(async (socket, next) => {
 io.on('connection', (socket) => {
 
     console.log('a user connected: ' + socket.id);
+
+    socket.on('update_token', async (newToken) => {
+        try {
+            const decoded = jwt.verify(newToken, JWT_SECRET);
+            const userDoc = await db.collection('users').doc(decoded.phone).get();
+            if (!userDoc.exists || userDoc.data().status !== 'approved') {
+                socket.disconnect(true);
+                return;
+            }
+            socket.userPhone = decoded.phone;
+            // Token successfully updated
+            socket.emit('token_updated');
+        } catch (err) {
+            // Invalid or expired token
+            socket.disconnect(true);
+        }
+    });
 
     socket.on('connect_sos', async (data) => {
         try {
