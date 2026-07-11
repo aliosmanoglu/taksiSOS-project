@@ -39,6 +39,17 @@ import * as Device from 'expo-device';
 import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
 import { usePTT } from '../hooks/usePTT';
+import PCM from 'react-native-pcm-player-lite';
+
+// DİKKAT: Bu değer, usePTT.ts içindeki bufferSize: 4096 (16kHz, 16bit Mono) ile senkron olmalıdır. Değişirse ikisi birden değişmelidir!
+const CHUNK_DURATION_MS = 128;
+
+let pcmQueue: string[] = [];
+let isPcmPlaying = false;
+let pcmStarted = false;
+let isPcmStarting = false;
+let pcmInterval: ReturnType<typeof setInterval> | null = null;
+let pcmStopTimer: ReturnType<typeof setTimeout> | null = null;
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 const originalConsoleError = console.error;
@@ -187,7 +198,7 @@ export default function App() {
     const initAudio = async () => {
       try {
         await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
+          allowsRecordingIOS: true, // Echo iptali ve kayıt için zorunlu (playAndRecord)
           playsInSilentModeIOS: true,
           staysActiveInBackground: true,
           playThroughEarpieceAndroid: false,
@@ -882,13 +893,73 @@ export default function App() {
       }
     });
 
+    newSocket.on('channel_locked', async (data: any) => {
+      if (data.speakerId !== newSocket.id) {
+        setIncomingSpeaker(data.lockedBy);
+        if (pcmStopTimer) { clearTimeout(pcmStopTimer); pcmStopTimer = null; }
+        if (!pcmStarted && !isPcmStarting) {
+          isPcmStarting = true;
+          try {
+            await PCM.start(16000);
+            pcmStarted = true;
+          } catch(e) { console.log('PCM Start err:', e); }
+          isPcmStarting = false;
+        }
+      }
+    });
+
+    newSocket.on('channel_released', () => {
+      setIncomingSpeaker(null);
+      // Sesi anında kesmeyip kuyruğun (son kelimelerin) bitmesini bekle
+      // Ancak çok uzun sürerse diye max 2 saniye sonra zorla kapat
+      if (pcmStopTimer) clearTimeout(pcmStopTimer);
+      pcmStopTimer = setTimeout(() => {
+        if (pcmStarted) {
+          PCM.stop().catch((e: any) => console.log('PCM Stop err:', e));
+          pcmStarted = false;
+        }
+        if (pcmInterval) { clearInterval(pcmInterval); pcmInterval = null; }
+        pcmQueue = [];
+      }, 2000);
+    });
+
     newSocket.on('receive_audio_chunk', async (payload: any) => {
       try {
-        // Base64 chunklarını anlık olarak çalmalıyız. 
-        // Şimdilik expo-av ile tam chunk streaming desteklenmediğinden 
-        // gelen her parçayı çalmaya çalışacak basit bir yaklaşım:
+        if (payload.senderId === newSocket.id) return; // Self-mute
+
+        // Dayanıklılık (Resilience): Sinyal (channel_locked) kaybolsa bile veri akıyorsa kapanmayı engelle
+        if (pcmStopTimer) { clearTimeout(pcmStopTimer); pcmStopTimer = null; }
+
+        if (!pcmStarted && !isPcmStarting) {
+          isPcmStarting = true;
+          try {
+            await PCM.start(16000);
+            pcmStarted = true;
+          } catch(e) { console.log('PCM Start err:', e); }
+          isPcmStarting = false;
+        }
+
         const dataUrl = typeof payload === 'string' ? payload : payload.audio;
-        // İleride buraya react-native-live-audio-stream oynatıcısı eklenebilir.
+        pcmQueue.push(dataUrl);
+
+        // Drift koruması: Kuyruk çok büyürse (örn. 10 chunk > 1 saniye) eski paketleri at
+        if (pcmQueue.length > 15) {
+          pcmQueue = pcmQueue.slice(pcmQueue.length - 10);
+        }
+
+        // Interval yoksa ve yeterli tampon (3 chunk) biriktiyse başlat
+        if (!pcmInterval && pcmQueue.length >= 3) {
+          pcmInterval = setInterval(() => {
+            if (pcmQueue.length > 0) {
+              const chunk = pcmQueue.shift();
+              if (chunk && pcmStarted) {
+                PCM.enqueueBase64(chunk);
+              }
+            }
+            // Kuyruk boşalsa bile interval'i DURDURMUYORUZ.
+            // Konuşma bitene kadar bekleyecek, sadece boşsa pas geçecek (mikro-kesinti olmaması için).
+          }, CHUNK_DURATION_MS); 
+        }
       } catch (e) {
         console.log("Chunk çalınamadı:", e);
       }

@@ -643,6 +643,12 @@ io.on('connection', (socket) => {
                     isCreator: false
                 });
             }
+            
+            // Yeni katılana, eğer oda şu an konuşma/telsiz durumundaysa bilgi ver
+            if (channelStates[room] && channelStates[room].isChannelActive) {
+                let speakerName = users.find(u => u.id === channelStates[room].activeSpeakerId)?.name || "Birisi";
+                socket.emit('channel_locked', { lockedBy: speakerName, speakerId: channelStates[room].activeSpeakerId });
+            }
     });
 
     socket.on('leave_sos_room', (room) => {
@@ -857,6 +863,13 @@ io.on('connection', (socket) => {
                         senderId: socket.id,
                         timestamp: Date.now(),
                         duration: data.duration || 0
+                    });
+
+                    // Dinleyicilerin sesi otomatik çalması için (kendisi hariç)
+                    socket.to(room).emit('play_voice', {
+                        audio: publicUrl,
+                        senderName: senderName,
+                        id: msgId
                     });
 
                 } catch (error) {
