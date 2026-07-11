@@ -530,7 +530,7 @@ export default function App() {
         const refreshToken = await SecureStore.getItemAsync('refreshToken');
         if (refreshToken) {
           try {
-            const res = await fetch(`${SERVER_URL}/api/refresh`, {
+            const res = await fetch(`${serverIp}/api/refresh`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ refreshToken })
@@ -580,7 +580,7 @@ export default function App() {
         
         // Eğer token süresinin bitmesine 10 dakikadan az kalmışsa yenile
         if (decoded.exp && decoded.exp - currentTime < 600) {
-          const res = await fetch(`${SERVER_URL}/api/refresh`, {
+          const res = await fetch(`${serverIp}/api/refresh`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ refreshToken: currentRefreshToken })
@@ -612,7 +612,7 @@ export default function App() {
       clearInterval(interval);
       appStateSub.remove();
     };
-  }, [accessToken, socket]);
+  }, [accessToken, socket, serverIp]);
 
   useEffect(() => {
     if (sosActive) {
@@ -740,13 +740,18 @@ export default function App() {
         setPlate(data.user.plate);
         setAccessToken(data.accessToken);
         
-        await SecureStore.setItemAsync('refreshToken', data.refreshToken);
+        if (data.refreshToken) {
+          await SecureStore.setItemAsync('refreshToken', data.refreshToken);
+        } else {
+          // Geriye uyumluluk veya sunucu güncellenmemişse eski tokeni sakla (Geçici)
+          await SecureStore.setItemAsync('refreshToken', data.token || "dummy_token");
+        }
         
         // Remove old style local storage
         await AsyncStorage.removeItem('user_credentials');
         await AsyncStorage.removeItem('user_token');
 
-        handleConnect(data.user.name, data.user.plate, phone, data.accessToken);
+        handleConnect(data.user.name, data.user.plate, phone, data.accessToken || data.token);
       } else if (data.status === 'not_found') {
         Alert.alert('Hata', 'Bu telefon numarasıyla kayıtlı bir hesap bulunamadı.');
       } else if (data.error) {
@@ -757,7 +762,8 @@ export default function App() {
         setAuthStatus(data.status);
       }
     } catch (e) {
-      Alert.alert('Hata', 'Sunucuya bağlanılamadı.');
+      console.log("Login hatası:", e);
+      Alert.alert('Hata', 'Sunucuya bağlanılamadı veya bir hata oluştu: ' + (e as Error).message);
     } finally {
       setIsConnecting(false);
     }
@@ -1705,7 +1711,7 @@ export default function App() {
           onPress={async () => {
             try {
               // 1. Sunucu tarafında token versiyonunu artırarak çıkış yap (Token Invalidation)
-              fetch(`${SERVER_URL}/api/logout`, {
+              fetch(`${serverIp}/api/logout`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone })
