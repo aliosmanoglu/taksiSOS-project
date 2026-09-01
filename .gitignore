@@ -147,4 +147,9 @@ node_modules/
 
 # Gizli Anahtarlar ve Sertifikalar
 firebase-service-account.json
-*.p8temp_audio/
+*.p8
+*.pem
+*.key
+temp_audio/
+google-services.json
+GoogleService-Info.plist
