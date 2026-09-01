@@ -109,8 +109,11 @@ body {
     transform: scale(1.05);
 }
 
-.logo-icon {
-    font-size: 1.5rem;
+.logo-image {
+    height: 32px;
+    width: auto;
+    border-radius: 6px;
+    object-fit: contain;
 }
 
 .nav-links {
