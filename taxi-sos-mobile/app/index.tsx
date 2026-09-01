@@ -10,7 +10,7 @@ LogBox.ignoreLogs([
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
-import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS, Video, ResizeMode } from 'expo-av';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 // Notifee'yi dinamik olarak yüklüyoruz. Expo Go'da çökmeyi önlemek için try-catch kullanıyoruz.
@@ -53,6 +53,7 @@ let pcmStarted = false;
 let isPcmStarting = false;
 let pcmInterval: ReturnType<typeof setInterval> | null = null;
 let pcmStopTimer: ReturnType<typeof setTimeout> | null = null;
+let serverClockOffset = 0;
 
 // --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
 const originalConsoleError = console.error;
@@ -93,7 +94,7 @@ type ChatMessage = {
   duration?: number;
 };
 
-const SERVER_URL = 'http://172.2.2.172:5000';
+
 
 async function registerForPushNotificationsAsync() {
   let token;
@@ -127,7 +128,32 @@ async function registerForPushNotificationsAsync() {
 }
 
 export default function App() {
+  const { height } = Dimensions.get('window');
   const lastNotificationResponse = Notifications.useLastNotificationResponse();
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  useEffect(() => {
+    const checkOnboarding = async () => {
+      try {
+        const hasSeen = await AsyncStorage.getItem('has_seen_onboarding');
+        if (!hasSeen) {
+          setShowOnboarding(true);
+        }
+      } catch (e) {
+        console.log(e);
+      }
+    };
+    checkOnboarding();
+  }, []);
+
+  const handleFinishOnboarding = async () => {
+    try {
+      await AsyncStorage.setItem('has_seen_onboarding', 'true');
+    } catch (e) {
+      console.log(e);
+    }
+    setShowOnboarding(false);
+  };
 
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -293,6 +319,8 @@ export default function App() {
   const chatListRef = useRef<FlatList>(null);
 
   const { isMicMuted, isChannelLocked, lockedBy, requestPtt, stopPtt } = usePTT(socket, activeSOSRoom);
+  const [pttHoldTime, setPttHoldTime] = useState(0);
+  const pttTimerRef = useRef<NodeJS.Timeout | null>(null);
 
 
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -396,13 +424,31 @@ export default function App() {
   }, [mapRegion.latitude, mapRegion.longitude, roomUsers, followMode, activeSOSRoom]);
 
 
+  const audioModeRef = useRef(true);
+
   const stopHistoryAudio = async () => {
     if (historySoundRef.current) {
-      await historySoundRef.current.stopAsync();
-      await historySoundRef.current.unloadAsync();
+      try {
+        await historySoundRef.current.stopAsync();
+        await historySoundRef.current.unloadAsync();
+      } catch (e) { }
       historySoundRef.current = null;
     }
     setPlayingAudioId(null);
+    if (!audioModeRef.current) {
+      audioModeRef.current = true;
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          playThroughEarpieceAndroid: false,
+          shouldDuckAndroid: false,
+          interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+          interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+        });
+      } catch (e) {}
+    }
   };
 
   const playHistorySequence = async (startIndex: number) => {
@@ -430,6 +476,19 @@ export default function App() {
     setPlayingAudioId(msg.id);
 
     try {
+      if (audioModeRef.current) {
+        audioModeRef.current = false;
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false, // Mikrofonu uyutup sesi HOPARLÖRE zorlar ve hızlı oynamasını sağlar
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          playThroughEarpieceAndroid: false,
+          shouldDuckAndroid: false,
+          interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+          interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+        });
+      }
+
       let soundToPlay;
       if (msg.content.startsWith('http')) {
         const fileName = msg.content.split('/').pop()?.split('?')[0] || `history_voice_${msg.id}.wav`;
@@ -451,7 +510,7 @@ export default function App() {
           soundToPlay = sound;
         }
       } else {
-        const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`;
+        const fileUri = FileSystem.documentDirectory + `history_voice_${Date.now()}.m4a`; // Orijinal base64 AAC formatı korundu
         const pureBase64 = msg.content.includes('base64,') ? msg.content.split('base64,')[1] : msg.content;
         await FileSystem.writeAsStringAsync(fileUri, pureBase64, { encoding: FileSystem.EncodingType.Base64 });
         const { sound } = await Audio.Sound.createAsync(
@@ -706,6 +765,24 @@ export default function App() {
     if (!name || !plate || !phone || !password || !passwordConfirm || !imageBase64) return Alert.alert('Uyarı', 'Tüm alanları ve fotoğrafı doldurun.');
     if (password !== passwordConfirm) return Alert.alert('Uyarı', 'Şifreler birbiriyle uyuşmuyor.');
     if (!isKvkkChecked || !isTermsChecked) return Alert.alert('Uyarı', 'Kayıt olmak için Kullanıcı Sözleşmesi ve KVKK metnini onaylamanız gerekmektedir.');
+
+    const nameRegex = /^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]{3,}$/;
+    if (!nameRegex.test(name.trim())) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir isim soyisim giriniz.');
+      return;
+    }
+    const phoneRegex = /^(05|5)[0-9]{9}$/;
+    if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir telefon numarası giriniz.');
+      return;
+    }
+    const plateClean = plate.replace(/\s/g, '');
+    const plateRegex = /^34T[A-Z0-9]{2,6}$/i;
+    if (!plateRegex.test(plateClean)) {
+      Alert.alert('Uyarı', 'Lütfen geçerli bir İstanbul Taksi plakası giriniz.');
+      return;
+    }
+
     setIsConnecting(true);
     try {
       const pushToken = await registerForPushNotificationsAsync();
@@ -888,6 +965,9 @@ export default function App() {
       setIsConnected(true);
       setIsConnecting(false);
 
+      // Sunucu saat senkronizasyonu için ping at
+      newSocket.emit('ping_time', Date.now());
+
       let pushToken = await registerForPushNotificationsAsync();
 
       newSocket.emit('connect_sos', {
@@ -920,6 +1000,14 @@ export default function App() {
         setAuthStatus(null);
         Alert.alert("Oturum Kapandı", "Oturum süreniz doldu veya başka bir cihazdan giriş yapıldı.");
       }
+    });
+
+    newSocket.on('pong_time', (data: { clientTime: number, serverTime: number }) => {
+      const now = Date.now();
+      const rtt = now - data.clientTime;
+      const estimatedServerTime = data.serverTime + (rtt / 2);
+      serverClockOffset = estimatedServerTime - now;
+      console.log("Sunucu saat farkı (offset) hesaplandı: ", serverClockOffset, "ms");
     });
 
     newSocket.on('all_users_update', (usersData: any[]) => {
@@ -1022,6 +1110,16 @@ export default function App() {
       try {
         if (payload.senderId === newSocket.id) return; // Self-mute
 
+        // Drift (Eskime/Burst) Koruması
+        // Cihazın saati ile sunucunun saati arasındaki senkronizasyon farkını (offset) kullan.
+        if (payload.timestamp) {
+           const adjustedLocalTime = Date.now() + serverClockOffset;
+           // Eşiği 1.5 saniyeden 5 saniyeye çıkardık (Ping süresi uzarsa sesler çöpe gitmesin)
+           if (adjustedLocalTime - payload.timestamp > 5000) {
+              return; 
+           }
+        }
+
         // Dayanıklılık (Resilience): Sinyal (channel_locked) kaybolsa bile veri akıyorsa kapanmayı engelle
         if (pcmStopTimer) { clearTimeout(pcmStopTimer); pcmStopTimer = null; }
 
@@ -1030,101 +1128,49 @@ export default function App() {
           try {
             await PCM.start(16000);
             pcmStarted = true;
+            // Başladıktan sonra bekleyen chunk'ları gönder
+            while (pcmQueue.length > 0) {
+              const chunk = pcmQueue.shift();
+              if (chunk) PCM.enqueueBase64(chunk);
+            }
           } catch(e) { console.log('PCM Start err:', e); }
           isPcmStarting = false;
         }
 
         const dataUrl = typeof payload === 'string' ? payload : payload.audio;
-        pcmQueue.push(dataUrl);
-
-        // Drift koruması: Kuyruk çok büyürse (örn. 10 chunk > 1 saniye) eski paketleri at
-        if (pcmQueue.length > 15) {
-          pcmQueue = pcmQueue.slice(pcmQueue.length - 10);
-        }
-
-        // Interval yoksa ve yeterli tampon (3 chunk) biriktiyse başlat
-        if (!pcmInterval && pcmQueue.length >= 3) {
-          pcmInterval = setInterval(() => {
-            if (pcmQueue.length > 0) {
-              const chunk = pcmQueue.shift();
-              if (chunk && pcmStarted) {
-                PCM.enqueueBase64(chunk);
-              }
-            }
-            // Kuyruk boşalsa bile interval'i DURDURMUYORUZ.
-            // Konuşma bitene kadar bekleyecek, sadece boşsa pas geçecek (mikro-kesinti olmaması için).
-          }, CHUNK_DURATION_MS); 
+        
+        // Interval (JS tarafında buffering) kullanmak sesi geciktirir ve anlık iletişimi bozar.
+        // Gelen veriyi anında Native tarafa iletiyoruz. (Native taraf kendi buffer'ını yönetir)
+        if (pcmStarted) {
+          PCM.enqueueBase64(dataUrl);
+        } else {
+          pcmQueue.push(dataUrl); // Henüz başlamadıysa kısa süreliğine kuyruğa al
+          // Güvenlik sınırı: PCM motoru bir sebeple başlatılamazsa veya takılırsa bellek şişmesini önlemek için
+          if (pcmQueue.length > 15) {
+            pcmQueue = pcmQueue.slice(pcmQueue.length - 10);
+          }
         }
       } catch (e) {
         console.log("Chunk çalınamadı:", e);
       }
     });
 
-    newSocket.on('play_voice', async (payload: any) => {
-      try {
-        const dataUrl = typeof payload === 'string' ? payload : payload.audio;
-        const speakerName = (typeof payload === 'object' && payload.senderName) ? payload.senderName : "BİRİSİ";
-
-        setIncomingSpeaker(speakerName);
-
-        let soundToPlay;
-        if (dataUrl.startsWith('http')) {
-          const fileName = dataUrl.split('/').pop()?.split('?')[0] || `incoming_voice_${Date.now()}.wav`;
-          const fileUri = FileSystem.documentDirectory + fileName;
-          const fileInfo = await FileSystem.getInfoAsync(fileUri);
-
-          if (fileInfo.exists) {
-            const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
-            soundToPlay = sound;
-          } else {
-            const { uri } = await FileSystem.downloadAsync(dataUrl, fileUri);
-            const { sound } = await Audio.Sound.createAsync({ uri });
-            soundToPlay = sound;
-          }
-        } else {
-          const base64Data = dataUrl.includes('base64,') ? dataUrl.split('base64,')[1] : dataUrl;
-          const fileUri = FileSystem.documentDirectory + `incoming_voice_${Date.now()}.m4a`;
-          await FileSystem.writeAsStringAsync(fileUri, base64Data, { encoding: FileSystem.EncodingType.Base64 });
-          const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
-          soundToPlay = sound;
-        }
-
-        soundToPlay.setOnPlaybackStatusUpdate(async (status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setIncomingSpeaker(null);
-            if (incomingSoundRef.current === soundToPlay) {
-              incomingSoundRef.current = null;
-            }
-            await soundToPlay.unloadAsync();
-          }
-        });
-
-        if (incomingSoundRef.current) {
-          try { await incomingSoundRef.current.stopAsync(); await incomingSoundRef.current.unloadAsync(); } catch (e) { }
-        }
-        incomingSoundRef.current = soundToPlay;
-
-        // Sesi maksimum yüksekliğe zorla
-        await soundToPlay.setVolumeAsync(1.0);
-        await soundToPlay.playAsync();
-      } catch (e) {
-        setIncomingSpeaker(null);
-        console.log("Ses çalınamadı:", e);
-      }
-    });
+    // play_voice listener tamamen kaldırıldı (Native player'in zaten çaldığı sesin tekrar oynamaması için)
 
     newSocket.on('chat_message', async (msg: ChatMessage) => {
       setChatMessages(prev => [...prev, msg]);
       if (msg.senderId !== newSocket.id) {
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: "💬 Yeni Mesaj",
-            body: `${msg.senderName}: ${msg.type === 'audio' ? '🎤 Sesli Mesaj' : msg.content}`,
-            sound: true,
-            priority: Notifications.AndroidNotificationPriority.HIGH,
-          },
-          trigger: null,
-        });
+        if (AppState.currentState !== 'active') {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: "💬 Yeni Mesaj",
+              body: `${msg.senderName}: ${msg.type === 'audio' ? '🎤 Sesli Mesaj' : msg.content}`,
+              sound: true,
+              priority: Notifications.AndroidNotificationPriority.HIGH,
+            },
+            trigger: null,
+          });
+        }
       }
     });
 
@@ -1282,18 +1328,32 @@ export default function App() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
   };
 
-  const handleStartPtt = () => {
+  const handleStartPtt = async () => {
+    await stopHistoryAudio(); // Mod değişiminin tamamlanması beklendi
     if (isChannelLocked || incomingSpeaker) {
       handleBlockedPtt();
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     requestPtt();
+    
+    setPttHoldTime(0);
+    pttTimerRef.current = setInterval(() => {
+      setPttHoldTime(prev => prev + 1);
+    }, 1000);
+    
     addLog("🎙️ Konuşma isteği gönderildi.");
   };
 
   const handleStopPtt = () => {
     stopPtt();
+    
+    if (pttTimerRef.current) {
+      clearInterval(pttTimerRef.current);
+      pttTimerRef.current = null;
+    }
+    setPttHoldTime(0);
+
     addLog("🔇 Ses gönderimi bitti.");
   };
 
@@ -1303,27 +1363,8 @@ export default function App() {
     if (isCheckingAuth || isConnecting || testLoading) {
       return (
         <View style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }}>
-
-          <Animated.Image
-            source={require('../assets/images/logo.png')}
-            style={{
-              width: 150,
-              height: 150,
-              borderRadius: 10,
-              borderWidth: 2,
-              borderColor: 'rgba(255, 255, 255, 0.1)',
-              transform: [
-                { translateY: splashLogoTranslateY },
-                { scale: splashLogoScale }
-              ]
-            }}
-          />
-
-          <Animated.View style={{ opacity: splashFormOpacity, alignItems: 'center', marginTop: 30 }}>
-            <ActivityIndicator size="large" color="#ff3b30" />
-
-          </Animated.View>
-
+          <ActivityIndicator size="large" color="#ff3b30" />
+          <Text style={{ color: 'white', marginTop: 15, fontSize: 16, fontWeight: 'bold' }}>Yükleniyor...</Text>
         </View>
       );
     }
@@ -1661,21 +1702,33 @@ export default function App() {
         </View>
 
         <View style={styles.pttBox}>
-          {activeSOSRoom && (
+          {activeSOSRoom ? (
             <>
-              <TouchableOpacity
-                style={[styles.pttButton, { width: 120, height: 120, borderRadius: 60, alignSelf: 'center' }, !isMicMuted && styles.pttButtonRecording, isChannelLocked && styles.pttButtonLocked]}
-                onPressIn={handleStartPtt}
-                onPressOut={handleStopPtt}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="mic" size={64} color="white" />
-              </TouchableOpacity>
-              {isChannelLocked && lockedBy && (
+              <View style={styles.pttStatusRow}>
+                <View style={[styles.pttStatusDot, (!isMicMuted || pttHoldTime > 0) ? { backgroundColor: '#4CAF50' } : { backgroundColor: '#555' }]} />
+                <Text style={styles.pttStatusTextNew}>{(!isMicMuted || pttHoldTime > 0) ? 'Ses yayını aktif' : 'Ses yayını kapalı'}</Text>
+                <Text style={styles.pttTimerText}>{formatDuration(pttHoldTime * 1000)}</Text>
+              </View>
+              <Text style={styles.pttInstruction}>Konuşmak için mikrofonu basılı tutun.</Text>
+              
+              <View style={styles.pttButtonContainer}>
+                {(!isMicMuted || pttHoldTime > 0) ? <MaterialIcons name="graphic-eq" size={32} color="#ff3b30" style={{ marginRight: 20 }} /> : null}
+                <TouchableOpacity
+                  style={[styles.pttButton, (!isMicMuted || pttHoldTime > 0) ? styles.pttButtonRecording : styles.pttButtonInactive, isChannelLocked && styles.pttButtonLocked]}
+                  onPressIn={handleStartPtt}
+                  onPressOut={handleStopPtt}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons name="mic" size={56} color="white" />
+                </TouchableOpacity>
+                {(!isMicMuted || pttHoldTime > 0) ? <MaterialIcons name="graphic-eq" size={32} color="#ff3b30" style={{ marginLeft: 20 }} /> : null}
+              </View>
+              
+              {isChannelLocked && !!lockedBy ? (
                 <Text style={[styles.pttStatusText, { marginTop: 15 }]}>{lockedBy} konuşuyor...</Text>
-              )}
+              ) : null}
             </>
-          )}
+          ) : null}
         </View>
 
         {/* SOHBET MODALI */}
@@ -1683,7 +1736,8 @@ export default function App() {
           <View style={styles.chatModalContainer}>
             <TouchableOpacity style={{ flex: 1, width: '100%' }} activeOpacity={1} onPress={() => setShowChat(false)} />
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
-              <View style={[styles.chatBox, { height: height * 0.6, width: '100%' }]}>
+              <View style={[styles.chatBox, { height: height * 0.7, width: '100%' }]}>
+                <View style={styles.chatDragHandle} />
                 <View style={styles.chatHeader}>
                   <Text style={styles.chatHeaderTitle}>Acil Durum Sohbeti</Text>
                   <TouchableOpacity onPress={() => setShowChat(false)}>
@@ -1696,35 +1750,65 @@ export default function App() {
                   onLayout={() => chatListRef.current?.scrollToEnd({ animated: true })}
                   data={chatMessages}
                   keyExtractor={item => item.id}
-                  contentContainerStyle={{ padding: 10 }}
+                  contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
                   renderItem={({ item }) => {
                     const isMe = socket && item.senderId === socket.id;
+                    const timestampStr = new Date(item.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+                    
                     return (
-                      <View style={[styles.chatBubble, isMe ? styles.chatBubbleMe : styles.chatBubbleOther]}>
-                        <Text style={styles.chatSenderName}>{item.senderName}</Text>
-                        {item.type === 'text' ? (
-                          <Text style={styles.chatContent}>{item.content}</Text>
-                        ) : (
-                          <View style={styles.audioMessageContainer}>
-                            <View style={styles.audioMessageRow}>
-                              <View style={styles.waveformBox}>
-                                {renderWaveform(item.id, playbackProgress[item.id] || 0)}
+                      <View style={[styles.chatRow, isMe ? styles.chatRowMe : styles.chatRowOther]}>
+                        {!isMe && (
+                          <View style={styles.chatAvatarOther}>
+                            <MaterialIcons name="local-taxi" size={18} color="#fbc02d" />
+                          </View>
+                        )}
+                        <View style={{ maxWidth: '75%' }}>
+                          <View style={[styles.chatBubble, isMe ? styles.chatBubbleMe : styles.chatBubbleOther]}>
+                            {!isMe && <Text style={styles.chatSenderName}>{item.senderName}</Text>}
+                            {item.type === 'text' ? (
+                              <Text style={styles.chatContent}>{item.content}</Text>
+                            ) : (
+                              <View style={styles.audioMessageContainer}>
+                                <View style={styles.audioMessageRow}>
+                                  <View style={styles.waveformBox}>
+                                    {renderWaveform(item.id, playbackProgress[item.id] || 0)}
+                                  </View>
+                                  <TouchableOpacity style={[styles.chatPlayIconBtn, { marginLeft: 10, marginRight: 0 }]} onPress={() => handlePlayPause(item.id)}>
+                                    <Text style={{ fontSize: 24 }}>{playingAudioId === item.id ? '⏹️' : '▶️'}</Text>
+                                  </TouchableOpacity>
+                                </View>
+                                <Text style={styles.audioDurationText}>{formatDuration(item.duration)}</Text>
                               </View>
-                              <TouchableOpacity style={[styles.chatPlayIconBtn, { marginLeft: 10, marginRight: 0 }]} onPress={() => handlePlayPause(item.id)}>
-                                <Text style={{ fontSize: 24 }}>{playingAudioId === item.id ? '⏹️' : '▶️'}</Text>
-                              </TouchableOpacity>
-                            </View>
-                            <Text style={styles.audioDurationText}>{formatDuration(item.duration)}</Text>
+                            )}
+                          </View>
+                          <View style={[styles.chatMetaRow, isMe ? { justifyContent: 'flex-end' } : { justifyContent: 'flex-start' }]}>
+                            <Text style={styles.chatTime}>{timestampStr}</Text>
+                            {isMe && <MaterialIcons name="done-all" size={14} color="#ff3b30" style={{ marginLeft: 4 }} />}
+                          </View>
+                        </View>
+                        {isMe && (
+                          <View style={styles.chatAvatarMe}>
+                            <MaterialIcons name="person" size={20} color="#ccc" />
                           </View>
                         )}
                       </View>
                     );
                   }}
                 />
+                
+                <View style={styles.onlineUsersRow}>
+                  <View style={styles.onlineDot} />
+                  <Text style={styles.onlineUsersText}>{roomUsers.length} kişi çevrimiçi</Text>
+                </View>
+
                 <View style={styles.chatInputContainer}>
+                  <TouchableOpacity style={styles.chatAttachmentButton}>
+                    <MaterialIcons name="attach-file" size={24} color="#aaa" />
+                  </TouchableOpacity>
                   <TextInput
                     style={styles.chatInput}
                     placeholder="Mesaj yaz..."
+                    placeholderTextColor="#777"
                     value={inputText}
                     onChangeText={setInputText}
                   />
@@ -1742,7 +1826,8 @@ export default function App() {
 
   // Görünüm 1: Ana Ekran (Home)
   return (
-    <View style={styles.container}>
+    <View style={styles.homeContainer}>
+      <View style={styles.homeContentContainer}>
 
       {/* Üst Kısım Bilgi Paneli */}
       <View style={{ position: 'absolute', top: 65, left: 20, zIndex: 100 }}>
@@ -1789,10 +1874,9 @@ export default function App() {
           <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>Çıkış Yap</Text>
         </TouchableOpacity>
       </View>
-
       {/* Üstteki SOS Alert Banner */}
       {sosNotifications.map((notification, index) => (
-        <View key={notification.roomName} style={[styles.topBanner, { top: 100 + (index * 90) }]}>
+        <View key={notification.roomName} style={[styles.topBanner, { position: 'relative', top: 0, marginBottom: 15 }]}>
           <View style={styles.bannerInfo}>
             <Text style={styles.bannerTitle}>🚨 ACİL YARDIM ÇAĞRISI!</Text>
             <Text style={styles.bannerSubtitle}>{notification.from} ({notification.distance.toFixed(2)} km)</Text>
@@ -1803,34 +1887,111 @@ export default function App() {
         </View>
       ))}
 
-      {/* Ana Ekran Ortalanmış Harita (Gizlendi) - Tamamen Silindi */}
-
-      {/* Ortalanmış SOS Butonu */}
-      <View style={styles.homeSosContainer}>
-        {!sosActive ? (
-          <TouchableOpacity onPress={handleSOS} activeOpacity={0.8}>
-            <Animated.View style={styles.sosButton}>
-              <Text style={styles.sosText}>SOS</Text>
-            </Animated.View>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity onPress={() => setPageMode('room')} activeOpacity={0.8}>
-            <Animated.View style={[styles.sosButton, { backgroundColor: '#ff9800', transform: [{ scale: pulseAnim }] }]}>
-              <Text style={[styles.sosText, { fontSize: 22, textAlign: 'center' }]}>SOS'e Dön</Text>
-            </Animated.View>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Sol Alt Profil Düzenle Butonu */}
-      <View style={{ position: 'absolute', bottom: 40, left: 20, zIndex: 100 }}>
+      {/* Profile Card */}
+      <View style={styles.profileCard}>
+        <View style={styles.profileInfoRow}>
+          <View style={styles.profileIconWrapper}>
+            <MaterialIcons name="person" size={32} color="#fff" />
+          </View>
+          <View style={styles.profileTextWrapper}>
+            <Text style={styles.profileName}>{name || 'Kullanıcı'}</Text>
+            {plate ? (
+              <View style={styles.plateRow}>
+                <Text style={styles.taxiEmoji}>🚕</Text>
+                <Text style={styles.plateText}>{plate}</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
         <TouchableOpacity
-          style={{ backgroundColor: '#ff3b30', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5, flexDirection: 'row', alignItems: 'center' }}
-          onPress={() => setShowProfileModal(true)}
+          style={styles.logoutButton}
+          onPress={async () => {
+            try {
+              fetch(`${serverIp}/api/logout`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone })
+              }).catch(() => {});
+              
+              if (socket) socket.disconnect();
+              setIsConnected(false);
+              
+              await SecureStore.deleteItemAsync('refreshToken');
+              await AsyncStorage.removeItem('activeSOSRoom');
+              setName("");
+              setPlate("");
+              setPhone("");
+              setAccessToken(null);
+              setAuthStatus(null);
+              setIsAutoLoginTriggered(false);
+            } catch (e) { }
+          }}
         >
-          <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 14 }}>Profili Düzenle</Text>
+          <MaterialIcons name="logout" size={16} color="#ff3b30" />
+          <Text style={styles.logoutText}>Çıkış Yap</Text>
         </TouchableOpacity>
       </View>
+
+      {/* System Status Card */}
+      <View style={styles.statusCard}>
+        <View style={styles.statusIconWrapper}>
+          <MaterialIcons name="verified-user" size={24} color="#4CAF50" />
+        </View>
+        <View style={styles.statusTextWrapper}>
+          <Text style={styles.statusTitle}>Sistem Aktif</Text>
+        </View>
+        <View style={styles.onlineBadge}>
+          <MaterialIcons name="signal-cellular-alt" size={14} color="#4CAF50" />
+          <Text style={styles.onlineText}>Çevrimiçi</Text>
+        </View>
+      </View>
+
+      {/* SOS Button Area */}
+      <View style={styles.sosArea}>
+        <TouchableOpacity onPress={sosActive ? () => setPageMode('room') : handleSOS} activeOpacity={0.8}>
+          <View style={[styles.sosButtonGlow, sosActive && { backgroundColor: 'rgba(255, 204, 0, 0.15)' }]}>
+            <Animated.View style={[styles.sosButtonInner, sosActive && { transform: [{ scale: pulseAnim }], backgroundColor: '#ffcc00' }]}>
+              {!sosActive && <MaterialIcons name="campaign" size={48} color="white" />}
+              <Text style={[styles.sosMainText, sosActive && { color: '#000' }]}>SOS</Text>
+              <Text style={[styles.sosSubText, sosActive && { color: '#000' }]}>{sosActive ? "SOS'e Dön" : "Acil Yardım Çağrısı"}</Text>
+            </Animated.View>
+          </View>
+        </TouchableOpacity>
+        <Text style={styles.sosInfoText}>
+          Acil bir durumda SOS butonuna basın.{"\n"}Konumunuz anında paylaşılacak ve en yakın{"\n"}taksicilere bildirilecektir.
+        </Text>
+      </View>
+
+      {/* Feature Grid */}
+      <View style={styles.featureGrid}>
+        <View style={styles.featureCard}>
+          <MaterialIcons name="location-on" size={28} color="#ff3b30" />
+          <Text style={styles.featureTitle}>Konum Paylaşımı</Text>
+          <Text style={styles.featureDesc}>Anlık konumunuz paylaşılır.</Text>
+        </View>
+        <View style={styles.featureCard}>
+          <MaterialIcons name="people" size={28} color="#ff3b30" />
+          <Text style={styles.featureTitle}>Taksicilere Bildirim</Text>
+          <Text style={styles.featureDesc}>Yakındaki taksiciler anında bilgilendirilir.</Text>
+        </View>
+        <View style={styles.featureCard}>
+          <MaterialIcons name="gpp-good" size={28} color="#ff3b30" />
+          <Text style={styles.featureTitle}>Acil Durum Odası</Text>
+          <Text style={styles.featureDesc}>Acil durum odası aktif hale gelir.</Text>
+        </View>
+      </View>
+
+      {/* Edit Profile Button */}
+      <TouchableOpacity style={styles.editProfileCard} onPress={() => setShowProfileModal(true)}>
+        <View style={styles.editProfileIconWrapper}>
+          <MaterialIcons name="person" size={28} color="white" />
+        </View>
+        <View style={styles.editProfileTextWrapper}>
+          <Text style={styles.editProfileTitle}>Profili Düzenle</Text>
+          <Text style={styles.editProfileDesc}>Ad, plaka ve diğer bilgilerinizi güncelleyin.</Text>
+        </View>
+        <MaterialIcons name="chevron-right" size={24} color="#ccc" />
+      </TouchableOpacity>
 
       {/* Profil Düzenleme Modalı */}
       <Modal visible={showProfileModal} animationType="slide" transparent={true} onRequestClose={() => setShowProfileModal(false)}>
@@ -1852,7 +2013,32 @@ export default function App() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Onboarding Modal */}
+      <Modal visible={showOnboarding} animationType="slide" transparent={false}>
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          <Video
+            source={{ uri: 'https://www.w3schools.com/html/mov_bbb.mp4' }}
+            style={{ flex: 1 }}
+            resizeMode={ResizeMode.COVER}
+            shouldPlay
+            useNativeControls={false}
+            onPlaybackStatusUpdate={status => {
+              if (status.isLoaded && status.didJustFinish) {
+                handleFinishOnboarding();
+              }
+            }}
+          />
+          <TouchableOpacity 
+            style={{ position: 'absolute', top: 50, right: 20, backgroundColor: 'rgba(0,0,0,0.5)', padding: 15, borderRadius: 8, zIndex: 100 }}
+            onPress={handleFinishOnboarding}
+          >
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Geç (Skip)</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
     </View>
+  </View>
   );
 }
 
@@ -1869,66 +2055,114 @@ const styles = StyleSheet.create({
   connectButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
 
   // Ana Ekran (Home) Görünümü
-  topBanner: { position: 'absolute', top: 50, width: '90%', backgroundColor: '#ff3b30', borderRadius: 12, padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 10, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5 },
+  topBanner: { backgroundColor: '#ff3b30', borderRadius: 12, padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5 },
   bannerInfo: { flex: 1 },
   bannerTitle: { color: 'white', fontWeight: '900', fontSize: 16 },
   bannerSubtitle: { color: 'white', fontSize: 14, marginTop: 2 },
   joinButton: { backgroundColor: 'white', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 8 },
   joinButtonText: { color: '#ff3b30', fontWeight: 'bold' },
 
-  mapCenterBox: { width: '90%', height: 350, marginTop: 140, borderRadius: 20, overflow: 'hidden', borderWidth: 2, borderColor: '#ddd', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 },
+  homeContainer: { flex: 1, backgroundColor: '#0a0a0a' },
+  homeContentContainer: { flex: 1, paddingHorizontal: 20, paddingBottom: 20, paddingTop: Platform.OS === 'ios' ? 50 : 30, justifyContent: 'space-between' },
+  
+  profileCard: { backgroundColor: '#1a1a1a', borderRadius: 15, padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 0 },
+  profileInfoRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  profileIconWrapper: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  profileTextWrapper: { flex: 1 },
+  profileName: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  plateRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  taxiEmoji: { fontSize: 14, marginRight: 5 },
+  plateText: { color: '#ccc', fontSize: 14 },
+  logoutButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#330000', backgroundColor: '#1a0000' },
+  logoutText: { color: '#ff3b30', fontSize: 12, fontWeight: 'bold', marginLeft: 4 },
+  
+  statusCard: { backgroundColor: '#1a1a1a', borderRadius: 15, padding: 15, flexDirection: 'row', alignItems: 'center', marginBottom: 0 },
+  statusIconWrapper: { width: 40, height: 40, borderRadius: 8, backgroundColor: 'rgba(76, 175, 80, 0.2)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  statusTextWrapper: { flex: 1 },
+  statusTitle: { color: '#4CAF50', fontSize: 15, fontWeight: 'bold', marginBottom: 2 },
+  statusDescription: { color: '#888', fontSize: 11, lineHeight: 16 },
+  onlineBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(76, 175, 80, 0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, alignSelf: 'flex-start' },
+  onlineText: { color: '#4CAF50', fontSize: 11, fontWeight: 'bold', marginLeft: 4 },
 
-  homeLogsContainer: { position: 'absolute', top: 120, left: 20, right: 20, zIndex: 10, alignItems: 'center' },
-  homeLogCard: { backgroundColor: 'rgba(0,0,0,0.7)', padding: 8, borderRadius: 8, marginBottom: 5 },
-  homeLogText: { color: 'white', fontSize: 12 },
+  sosArea: { flex: 1, alignItems: 'center', justifyContent: 'center', marginBottom: 0, marginVertical: 10 },
+  sosButtonGlow: { width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(255, 59, 48, 0.15)', justifyContent: 'center', alignItems: 'center' },
+  sosButtonInner: { width: 170, height: 170, borderRadius: 85, backgroundColor: '#ff3b30', justifyContent: 'center', alignItems: 'center', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 30, elevation: 15 },
+  sosMainText: { color: 'white', fontSize: 32, fontWeight: '900', marginTop: 5 },
+  sosSubText: { color: 'white', fontSize: 13, marginTop: 0 },
+  sosInfoText: { color: '#888', fontSize: 12, textAlign: 'center', marginTop: 15, lineHeight: 18 },
 
-  homeSosContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' },
-  sosButton: { width: 150, height: 150, borderRadius: 75, backgroundColor: '#ff3b30', justifyContent: 'center', alignItems: 'center', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20, elevation: 10 },
-  sosText: { color: 'white', fontSize: 32, fontWeight: '900' },
+  featureGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+  featureCard: { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 12, padding: 15, marginHorizontal: 4, alignItems: 'center' },
+  featureTitle: { color: 'white', fontSize: 12, fontWeight: 'bold', textAlign: 'center', marginTop: 10, marginBottom: 5 },
+  featureDesc: { color: '#888', fontSize: 10, textAlign: 'center' },
+
+  editProfileCard: { backgroundColor: '#3a0f12', borderRadius: 15, padding: 15, flexDirection: 'row', alignItems: 'center' },
+  editProfileIconWrapper: { width: 50, height: 50, borderRadius: 10, backgroundColor: '#ff3b30', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  editProfileTextWrapper: { flex: 1 },
+  editProfileTitle: { color: 'white', fontSize: 16, fontWeight: 'bold', marginBottom: 2 },
+  editProfileDesc: { color: '#ccc', fontSize: 12 },
 
   // Oda (Room) Görünümü
   roomContainer: { flex: 1, backgroundColor: '#111' },
-  roomHeader: { height: 100, paddingTop: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, backgroundColor: '#222' },
-  headerButton: { padding: 10, backgroundColor: '#444', borderRadius: 8 },
-  headerButtonRed: { padding: 10, backgroundColor: '#ff3b30', borderRadius: 8 },
-  headerButtonText: { color: 'white', fontWeight: 'bold' },
+  roomHeader: { height: 100, paddingTop: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, backgroundColor: '#111' },
+  headerButton: { flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#222', borderRadius: 8 },
+  headerButtonRed: { padding: 10, backgroundColor: '#cc0000', borderRadius: 8 },
+  headerButtonText: { color: '#ccc', fontWeight: 'bold' },
   roomTitle: { color: 'white', fontSize: 16, fontWeight: 'bold' },
 
   roomMapBox: { flex: 1, backgroundColor: '#333' },
 
-  pttBox: { height: 250, backgroundColor: '#111', borderTopWidth: 2, borderColor: '#222', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  pttStatusText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 18, marginBottom: 20 },
-  pttButton: { width: '100%', height: 100, backgroundColor: '#333', borderRadius: 50, justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#555' },
-  pttButtonRecording: { backgroundColor: '#81c784', borderColor: '#1b5e20' },
-  pttButtonLocked: { backgroundColor: '#ff3333', borderColor: '#cc0000' },
-  pttButtonText: { color: 'white', fontSize: 24, fontWeight: 'bold' },
+  pttBox: { backgroundColor: '#161616', borderTopLeftRadius: 30, borderTopRightRadius: 30, alignItems: 'center', padding: 30, paddingBottom: 50, minHeight: 280 },
+  pttStatusRow: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'center', marginBottom: 10 },
+  pttStatusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
+  pttStatusTextNew: { color: 'white', fontSize: 16, fontWeight: 'bold', marginRight: 20 },
+  pttTimerText: { color: '#ccc', fontSize: 16, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
+  pttInstruction: { color: '#888', fontSize: 14, marginBottom: 40 },
+  pttButtonContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: '100%' },
+  pttButton: { width: 130, height: 130, borderRadius: 65, justifyContent: 'center', alignItems: 'center' },
+  pttButtonInactive: { backgroundColor: '#333', borderWidth: 2, borderColor: '#444' },
+  pttButtonRecording: { backgroundColor: '#ff3b30', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20, elevation: 15 },
+  pttButtonLocked: { backgroundColor: '#cc0000', borderColor: '#880000' },
+  pttStatusText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 16, marginTop: 15 },
 
   sosMarkerContainer: { alignItems: 'center', justifyContent: 'center' },
   sosBadge: { backgroundColor: '#ff3b30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, borderWidth: 2, borderColor: 'white', zIndex: 2, elevation: 5, marginBottom: -5 },
   sosBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
   carIcon: { fontSize: 36 },
   taxiMarker: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  focusButton: { position: 'absolute', backgroundColor: 'rgba(255, 59, 48, 0.9)', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5 },
+  focusButton: { position: 'absolute', backgroundColor: '#d32f2f', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5 },
   focusButtonText: { color: 'white', fontWeight: 'bold' },
 
-  chatModalContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.7)' },
-  chatBox: { backgroundColor: '#222', height: '60%', borderTopLeftRadius: 20, borderTopRightRadius: 20, display: 'flex' },
-  chatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderColor: '#444', backgroundColor: '#333', borderTopLeftRadius: 20, borderTopRightRadius: 20 },
+  chatModalContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.85)' },
+  chatBox: { backgroundColor: '#1a1a1a', height: '70%', borderTopLeftRadius: 25, borderTopRightRadius: 25, display: 'flex' },
+  chatDragHandle: { width: 40, height: 5, backgroundColor: '#555', borderRadius: 3, alignSelf: 'center', marginTop: 15, marginBottom: 5 },
+  chatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 15, borderBottomWidth: 1, borderColor: '#333' },
   chatHeaderTitle: { fontSize: 18, fontWeight: 'bold', color: 'white' },
-  chatCloseText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 16 },
-  chatBubble: { padding: 10, borderRadius: 10, marginBottom: 10, maxWidth: '80%' },
-  chatBubbleMe: { backgroundColor: '#007aff', alignSelf: 'flex-end' },
-  chatBubbleOther: { backgroundColor: '#444', alignSelf: 'flex-start' },
-  chatSenderName: { fontSize: 12, color: '#ccc', marginBottom: 2, fontWeight: 'bold' },
-  chatContent: { color: '#fff', fontSize: 16 },
+  chatCloseText: { color: '#ff3b30', fontSize: 16 },
+  chatRow: { flexDirection: 'row', marginBottom: 15, alignItems: 'flex-start' },
+  chatRowMe: { justifyContent: 'flex-end' },
+  chatRowOther: { justifyContent: 'flex-start' },
+  chatAvatarOther: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  chatAvatarMe: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
+  chatBubble: { padding: 12, borderRadius: 15 },
+  chatBubbleMe: { backgroundColor: '#d32f2f', borderTopRightRadius: 4 },
+  chatBubbleOther: { backgroundColor: '#2a2a2a', borderTopLeftRadius: 4 },
+  chatSenderName: { fontSize: 13, color: '#ff5252', marginBottom: 4, fontWeight: 'bold' },
+  chatContent: { color: '#fff', fontSize: 15 },
+  chatMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  chatTime: { fontSize: 11, color: '#888' },
   chatPlayIconBtn: { marginRight: 10, justifyContent: 'center', alignItems: 'center' },
   audioMessageContainer: { minWidth: 150, paddingVertical: 5 },
   audioMessageRow: { flexDirection: 'row', alignItems: 'center' },
   waveformBox: { flex: 1 },
   audioDurationText: { color: '#aaa', fontSize: 11, fontWeight: 'bold', marginTop: 5, alignSelf: 'flex-start' },
-  chatInputContainer: { flexDirection: 'row', padding: 10, backgroundColor: '#333', borderTopWidth: 1, borderColor: '#444' },
-  chatInput: { flex: 1, borderWidth: 1, borderColor: '#555', borderRadius: 20, paddingHorizontal: 15, paddingVertical: 10, backgroundColor: '#222', color: 'white' },
-  chatSendButton: { backgroundColor: '#007aff', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20, borderRadius: 20, marginLeft: 10 },
-  chatSendText: { color: 'white', fontWeight: 'bold' },
+  onlineUsersRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
+  onlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#4CAF50', marginRight: 8 },
+  onlineUsersText: { color: '#888', fontSize: 12 },
+  chatInputContainer: { flexDirection: 'row', alignItems: 'center', padding: 15, paddingBottom: 30, backgroundColor: '#1a1a1a', borderTopWidth: 1, borderColor: '#333' },
+  chatAttachmentButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#2a2a2a', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  chatInput: { flex: 1, backgroundColor: '#2a2a2a', borderRadius: 22, paddingHorizontal: 15, paddingVertical: 12, color: 'white', fontSize: 15 },
+  chatSendButton: { backgroundColor: '#007aff', height: 44, paddingHorizontal: 20, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
+  chatSendText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
 
 });

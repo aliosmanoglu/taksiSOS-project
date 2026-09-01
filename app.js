@@ -82,7 +82,23 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'Eksik bilgi' });
         }
 
-        const existingDoc = await db.collection('users').doc(phone).get();
+        const nameRegex = /^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]{3,}$/;
+        if (!nameRegex.test(name.trim())) {
+            return res.status(400).json({ error: 'Lütfen geçerli bir isim soyisim giriniz.' });
+        }
+
+        const phoneRegex = /^(05|5)[0-9]{9}$/;
+        if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
+            return res.status(400).json({ error: 'Lütfen geçerli bir telefon numarası giriniz.' });
+        }
+
+        const plateClean = plate.replace(/\s/g, '');
+        const plateRegex = /^34T[A-Z0-9]{2,6}$/i;
+        if (!plateRegex.test(plateClean)) {
+            return res.status(400).json({ error: 'Lütfen geçerli bir İstanbul Taksi plakası giriniz.' });
+        }
+
+        const existingDoc = await db.collection('users').doc(phone.replace(/\s/g, '')).get();
         if (existingDoc.exists) {
             return res.status(400).json({ error: 'Bu telefon numarası ile zaten kayıt olunmuş.' });
         }
@@ -92,20 +108,20 @@ app.post('/api/register', async (req, res) => {
         // Upload image to Firebase Storage
         const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
-        
+
         const fileName = `driver_cards/${phone}_${Date.now()}.jpg`;
         const file = bucket.file(fileName);
-        
+
         await file.save(buffer, {
             metadata: { contentType: 'image/jpeg' }
         });
-        
+
         // Make the file publicly accessible so admin panel can see it
         await file.makePublic();
         const idCardUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
 
         // Save to Firestore
-        await db.collection('users').doc(phone).set({
+        await db.collection('users').doc(phone.replace(/\s/g, '')).set({
             name,
             phone,
             plate,
@@ -129,7 +145,7 @@ app.post('/api/login', async (req, res) => {
         const { phone, password } = req.body;
         if (!phone || !password) return res.status(400).json({ error: 'Telefon numarası ve şifre gerekli' });
 
-        const userDoc = await db.collection('users').doc(phone).get();
+        const userDoc = await db.collection('users').doc(phone.replace(/\s/g, '')).get();
         if (!userDoc.exists) {
             return res.json({ status: 'not_found' });
         }
@@ -137,7 +153,7 @@ app.post('/api/login', async (req, res) => {
         const userData = userDoc.data();
 
         if (!userData.password) {
-             return res.json({ status: 'rejected', error: 'Hesabınız eski sisteme ait ve şifresizdir. Lütfen yeniden kayıt olun.' });
+            return res.json({ status: 'rejected', error: 'Hesabınız eski sisteme ait ve şifresizdir. Lütfen yeniden kayıt olun.' });
         }
 
         const isMatch = await bcrypt.compare(password, userData.password);
@@ -147,24 +163,24 @@ app.post('/api/login', async (req, res) => {
 
         if (userData.status === 'approved') {
             const tokenVersion = userData.tokenVersion || 1;
-            
+
             const accessToken = jwt.sign(
-                { 
-                    phone: userData.phone, 
-                    name: userData.name, 
-                    plate: userData.plate, 
-                    status: userData.status 
-                }, 
-                JWT_SECRET, 
+                {
+                    phone: userData.phone,
+                    name: userData.name,
+                    plate: userData.plate,
+                    status: userData.status
+                },
+                JWT_SECRET,
                 { expiresIn: '1h' }
             );
 
             const refreshToken = jwt.sign(
-                { 
-                    phone: userData.phone, 
-                    tokenVersion 
-                }, 
-                JWT_SECRET, 
+                {
+                    phone: userData.phone,
+                    tokenVersion
+                },
+                JWT_SECRET,
                 { expiresIn: '30d' }
             );
 
@@ -193,7 +209,7 @@ app.post('/api/refresh', async (req, res) => {
         }
 
         // Check if user still exists and tokenVersion matches
-        const userDoc = await db.collection('users').doc(decoded.phone).get();
+        const userDoc = await db.collection('users').doc(decoded.phone.replace(/\s/g, '')).get();
         if (!userDoc.exists) {
             return res.status(401).json({ error: 'Kullanıcı bulunamadı' });
         }
@@ -207,13 +223,13 @@ app.post('/api/refresh', async (req, res) => {
 
         // Generate new Access Token
         const accessToken = jwt.sign(
-            { 
-                phone: userData.phone, 
-                name: userData.name, 
-                plate: userData.plate, 
-                status: userData.status 
-            }, 
-            JWT_SECRET, 
+            {
+                phone: userData.phone,
+                name: userData.name,
+                plate: userData.plate,
+                status: userData.status
+            },
+            JWT_SECRET,
             { expiresIn: '1h' }
         );
 
@@ -228,7 +244,7 @@ app.post('/api/logout', async (req, res) => {
         const { phone } = req.body;
         if (!phone) return res.status(400).json({ error: 'Telefon gerekli' });
 
-        const userDocRef = db.collection('users').doc(phone);
+        const userDocRef = db.collection('users').doc(phone.replace(/\s/g, ''));
         const userDoc = await userDocRef.get();
         if (userDoc.exists) {
             const currentVersion = userDoc.data().tokenVersion || 1;
@@ -254,9 +270,9 @@ app.get('/api/admin/pending-users', async (req, res) => {
 app.post('/api/admin/approve-user', async (req, res) => {
     try {
         const { phone } = req.body;
-        const userDoc = await db.collection('users').doc(phone).get();
+        const userDoc = await db.collection('users').doc(phone.replace(/\s/g, '')).get();
         if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
-        
+
         const userData = userDoc.data();
 
         // Delete photo from storage (KVKK)
@@ -271,7 +287,7 @@ app.post('/api/admin/approve-user', async (req, res) => {
             }
         }
 
-        await db.collection('users').doc(phone).update({
+        await db.collection('users').doc(phone.replace(/\s/g, '')).update({
             status: 'approved',
             idCardUrl: null
         });
@@ -285,9 +301,9 @@ app.post('/api/admin/approve-user', async (req, res) => {
 app.post('/api/admin/reject-user', async (req, res) => {
     try {
         const { phone } = req.body;
-        const userDoc = await db.collection('users').doc(phone).get();
+        const userDoc = await db.collection('users').doc(phone.replace(/\s/g, '')).get();
         if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
-        
+
         const userData = userDoc.data();
 
         if (userData.idCardUrl) {
@@ -300,7 +316,7 @@ app.post('/api/admin/reject-user', async (req, res) => {
             }
         }
 
-        await db.collection('users').doc(phone).update({
+        await db.collection('users').doc(phone.replace(/\s/g, '')).update({
             status: 'rejected',
             idCardUrl: null
         });
@@ -314,9 +330,9 @@ app.post('/api/admin/reject-user', async (req, res) => {
 app.post('/api/admin/ban-user', async (req, res) => {
     try {
         const { phone } = req.body;
-        const userDoc = await db.collection('users').doc(phone).get();
+        const userDoc = await db.collection('users').doc(phone.replace(/\s/g, '')).get();
         if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
-        
+
         const userData = userDoc.data();
 
         if (userData.idCardUrl) {
@@ -329,7 +345,7 @@ app.post('/api/admin/ban-user', async (req, res) => {
             }
         }
 
-        await db.collection('users').doc(phone).update({
+        await db.collection('users').doc(phone.replace(/\s/g, '')).update({
             status: 'banned',
             idCardUrl: null
         });
@@ -343,9 +359,9 @@ app.post('/api/admin/ban-user', async (req, res) => {
 app.post('/api/admin/delete-user', async (req, res) => {
     try {
         const { phone } = req.body;
-        const userDoc = await db.collection('users').doc(phone).get();
+        const userDoc = await db.collection('users').doc(phone.replace(/\s/g, '')).get();
         if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
-        
+
         const userData = userDoc.data();
 
         if (userData.idCardUrl) {
@@ -358,7 +374,7 @@ app.post('/api/admin/delete-user', async (req, res) => {
             }
         }
 
-        await db.collection('users').doc(phone).delete();
+        await db.collection('users').doc(phone.replace(/\s/g, '')).delete();
 
         res.json({ success: true });
     } catch (e) {
@@ -393,16 +409,16 @@ app.get('/api/admin/users', async (req, res) => {
 app.get('/api/admin/user/:phone', async (req, res) => {
     try {
         const phone = req.params.phone;
-        const userDoc = await db.collection('users').doc(phone).get();
+        const userDoc = await db.collection('users').doc(phone.replace(/\s/g, '')).get();
         if (!userDoc.exists) return res.status(404).json({ error: 'User not found' });
-        
+
         let userData = userDoc.data();
-        
+
         // Find archives where the user is the creator
         const sosSnapshot = await db.collection('sos_archives').where('userPhone', '==', phone).get();
         let sosHistory = [];
         sosSnapshot.forEach(doc => sosHistory.push({ id: doc.id, ...doc.data() }));
-        
+
         // Sort in memory to avoid composite index requirement
         sosHistory.sort((a, b) => b.startTime - a.startTime);
 
@@ -460,7 +476,7 @@ io.use(async (socket, next) => {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         // Check firestore to see if user is still approved (so banned users can't connect)
-        const userDoc = await db.collection('users').doc(decoded.phone).get();
+        const userDoc = await db.collection('users').doc(decoded.phone.replace(/\s/g, '')).get();
         if (!userDoc.exists || userDoc.data().status !== 'approved') {
             return next(new Error('Banned or not approved'));
         }
@@ -478,7 +494,7 @@ io.on('connection', (socket) => {
     socket.on('update_token', async (newToken) => {
         try {
             const decoded = jwt.verify(newToken, JWT_SECRET);
-            const userDoc = await db.collection('users').doc(decoded.phone).get();
+            const userDoc = await db.collection('users').doc(decoded.phone.replace(/\s/g, '')).get();
             if (!userDoc.exists || userDoc.data().status !== 'approved') {
                 socket.disconnect(true);
                 return;
@@ -730,27 +746,27 @@ io.on('connection', (socket) => {
         user.activeRoom = room;
         io.emit('all_users_update', users);
 
-            if (activeArchives[room] && room !== "sos_room_" + user.phone) {
-                let existing = activeArchives[room].helpers.find(h => h.phone === user.phone);
-                if (!existing) {
-                    activeArchives[room].helpers.push({ name: user.name, phone: user.phone, plate: user.plate });
-                }
-                activeArchives[room].locationHistory.push({
-                    id: user.id,
-                    name: user.name,
-                    plate: user.plate,
-                    lat: user.lat,
-                    lon: user.lon,
-                    timestamp: Date.now(),
-                    isCreator: false
-                });
+        if (activeArchives[room] && room !== "sos_room_" + user.phone) {
+            let existing = activeArchives[room].helpers.find(h => h.phone === user.phone);
+            if (!existing) {
+                activeArchives[room].helpers.push({ name: user.name, phone: user.phone, plate: user.plate });
             }
-            
-            // Yeni katılana, eğer oda şu an konuşma/telsiz durumundaysa bilgi ver
-            if (channelStates[room] && channelStates[room].isChannelActive) {
-                let speakerName = users.find(u => u.id === channelStates[room].activeSpeakerId)?.name || "Birisi";
-                socket.emit('channel_locked', { lockedBy: speakerName, speakerId: channelStates[room].activeSpeakerId });
-            }
+            activeArchives[room].locationHistory.push({
+                id: user.id,
+                name: user.name,
+                plate: user.plate,
+                lat: user.lat,
+                lon: user.lon,
+                timestamp: Date.now(),
+                isCreator: false
+            });
+        }
+
+        // Yeni katılana, eğer oda şu an konuşma/telsiz durumundaysa bilgi ver
+        if (channelStates[room] && channelStates[room].isChannelActive) {
+            let speakerName = users.find(u => u.id === channelStates[room].activeSpeakerId)?.name || "Birisi";
+            socket.emit('channel_locked', { lockedBy: speakerName, speakerId: channelStates[room].activeSpeakerId });
+        }
     });
 
     socket.on('leave_sos_room', (room) => {
@@ -765,10 +781,53 @@ io.on('connection', (socket) => {
     socket.on('update_profile', (data) => {
         let user = users.find(u => u.id === socket.id);
         if (user) {
+            const nameRegex = /^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]{3,}$/;
+            const phoneRegex = /^(05|5)[0-9]{9}$/;
+            const plateRegex = /^34T[A-Z0-9]{2,6}$/i;
+
+            const plateClean = (data.plate || '').replace(/\s/g, '');
+            const phoneClean = (data.phone || '').replace(/\s/g, '');
+            const nameClean = (data.name || '').trim();
+
+            if (!nameRegex.test(nameClean) || !phoneRegex.test(phoneClean) || !plateRegex.test(plateClean)) {
+                socket.emit('error', 'Geçersiz profil bilgileri (İsim, Telefon veya Plaka).');
+                return;
+            }
+
+            const oldPhoneClean = (user.phone || '').replace(/\s/g, '');
+
             user.name = data.name;
             user.plate = data.plate;
             user.phone = data.phone;
             io.emit('all_users_update', users);
+
+            if (oldPhoneClean !== phoneClean) {
+                db.runTransaction(async (t) => {
+                    const oldDocRef = db.collection('users').doc(oldPhoneClean);
+                    const doc = await t.get(oldDocRef);
+                    if (doc.exists) {
+                        const oldData = doc.data();
+                        oldData.name = nameClean;
+                        oldData.plate = plateClean;
+                        oldData.phone = phoneClean;
+                        // Numara değiştiği için eski oturumları (token'ları) geçersiz kılmak adına versiyonu artır
+                        oldData.tokenVersion = (oldData.tokenVersion || 1) + 1;
+
+                        const newDocRef = db.collection('users').doc(phoneClean);
+                        t.set(newDocRef, oldData);
+                        t.delete(oldDocRef);
+                    }
+                }).catch(err => {
+                    console.error("Firestore transaction error during phone change:", err);
+                });
+            } else {
+                db.collection('users').doc(oldPhoneClean).update({
+                    name: nameClean,
+                    plate: plateClean
+                }).catch(err => {
+                    console.error("Firestore update error during profile change:", err);
+                });
+            }
 
             if (user.pushToken) {
                 let existingDevice = registeredDevices.find(d => d.pushToken === user.pushToken);
@@ -843,7 +902,7 @@ io.on('connection', (socket) => {
 
         if (channelStates[room].isChannelActive) {
             // Kanal meşgul
-            socket.emit('talk_rejected', { reason: 'Channel is currently locked by another user.' });
+            socket.emit('talk_rejected', { reason: 'ALREADY_LOCKED' });
         } else {
             // İzin ver
             channelStates[room].isChannelActive = true;
@@ -876,8 +935,12 @@ io.on('connection', (socket) => {
                 writeStreams[socket.id].write(buffer);
             }
 
-            // Diğer dinleyicilere stream et
-            socket.to(room).emit('receive_audio_chunk', { audio: chunkBase64, senderId: socket.id });
+            // Diğer dinleyicilere stream et (Drift/Burst koruması için server zaman damgası ekliyoruz)
+            socket.to(room).emit('receive_audio_chunk', {
+                audio: chunkBase64,
+                senderId: socket.id,
+                timestamp: Date.now()
+            });
         }
     });
 
@@ -908,7 +971,7 @@ io.on('connection', (socket) => {
                     const rawBuffer = fs.readFileSync(tempFilePath);
                     const wavHeader = getWavHeader(rawBuffer.length, 16000, 1, 16);
                     const wavBuffer = Buffer.concat([wavHeader, rawBuffer]);
-                    
+
                     const wavFilePath = tempFilePath.replace('.raw', '.wav');
                     fs.writeFileSync(wavFilePath, wavBuffer);
 
@@ -928,8 +991,10 @@ io.on('connection', (socket) => {
 
                     // Dosyayı public okumaya açıyoruz (veya signed url alabilirsiniz)
                     const file = bucket.file(destination);
-                    await file.makePublic();
-                    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${destination}`;
+                    const [publicUrl] = await file.getSignedUrl({
+                        action: 'read',
+                        expires: '01-01-2030'
+                    });
 
                     // Firestore'a kaydet
                     const docData = {
@@ -967,12 +1032,7 @@ io.on('connection', (socket) => {
                         duration: data.duration || 0
                     });
 
-                    // Dinleyicilerin sesi otomatik çalması için (kendisi hariç)
-                    socket.to(room).emit('play_voice', {
-                        audio: publicUrl,
-                        senderName: senderName,
-                        id: msgId
-                    });
+                    // (Double play olmaması için otomatik çalmayı kapatıyoruz, gerçek zamanlı pcm zaten çaldı)
 
                 } catch (error) {
                     console.error("Storage upload hatası:", error);

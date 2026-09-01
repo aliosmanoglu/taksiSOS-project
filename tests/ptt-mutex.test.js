@@ -59,7 +59,7 @@ describe('PTT Mutex Logic', () => {
     clientB.on('talk_rejected', (data) => {
       expect(aGranted).toBe(true);
       expect(bLocked).toBe(true);
-      expect(data.reason).toContain('Channel is currently locked');
+      expect(data.reason).toBe('ALREADY_LOCKED');
       
       clientA.emit('stop_talk', { room: ROOM });
     });
