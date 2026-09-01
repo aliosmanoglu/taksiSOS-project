@@ -63,18 +63,18 @@
                 <h2>Bize Ulaşın</h2>
                 <p>Sorununuzu detaylı bir şekilde yazın, en kısa sürede dönüş yapalım.</p>
                 
-                <form id="support-form" class="contact-form">
+                <form id="support-form" class="contact-form" action="https://formspree.io/f/xaeyoyoe" method="POST">
                     <div class="form-group">
                         <label for="name">Adınız Soyadınız</label>
-                        <input type="text" id="name" required placeholder="Örn: Ali Yılmaz">
+                        <input type="text" id="name" name="name" required placeholder="Örn: Ali Yılmaz">
                     </div>
                     <div class="form-group">
                         <label for="email">E-posta Adresiniz</label>
-                        <input type="email" id="email" required placeholder="ornek@email.com">
+                        <input type="email" id="email" name="email" required placeholder="ornek@email.com">
                     </div>
                     <div class="form-group">
                         <label for="message">Mesajınız / Sorununuz</label>
-                        <textarea id="message" rows="5" required placeholder="Yaşadığınız problemi detaylıca anlatın..."></textarea>
+                        <textarea id="message" name="message" rows="5" required placeholder="Yaşadığınız problemi detaylıca anlatın..."></textarea>
                     </div>
                     <button type="submit" class="submit-btn">
                         <span>Gönder</span>
