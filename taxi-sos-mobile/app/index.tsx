@@ -278,6 +278,8 @@ export default function App() {
   const [incomingSpeaker, setIncomingSpeaker] = useState<string | null>(null);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const radarAnim1 = useRef(new Animated.Value(0)).current;
+  const radarAnim2 = useRef(new Animated.Value(0)).current;
   const recordingRef = useRef<Audio.Recording | null>(null);
   const mapRef = useRef<MapView>(null);
 
@@ -687,6 +689,28 @@ export default function App() {
     } else {
       pulseAnim.stopAnimation();
       pulseAnim.setValue(1);
+    }
+  }, [sosActive]);
+
+  // Ana ekrandaki SOS butonunun dikkat çekmesi için "radar" halkaları
+  useEffect(() => {
+    if (!sosActive) {
+      const makeLoop = (anim: Animated.Value, delay: number) => Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 1800, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        ])
+      );
+      const loop1 = makeLoop(radarAnim1, 0);
+      const loop2 = makeLoop(radarAnim2, 900);
+      loop1.start();
+      loop2.start();
+      return () => {
+        loop1.stop();
+        loop2.stop();
+        radarAnim1.setValue(0);
+        radarAnim2.setValue(0);
+      };
     }
   }, [sosActive]);
 
@@ -1826,21 +1850,27 @@ export default function App() {
 
   // Görünüm 1: Ana Ekran (Home)
   return (
-    <View style={styles.homeContainer}>
-      <View style={styles.homeContentContainer}>
+    <View style={styles.container}>
 
-      {/* Üst Kısım Bilgi Paneli */}
-      <View style={{ position: 'absolute', top: 65, left: 20, zIndex: 100 }}>
-        <View style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}>
-          <Text style={{ color: '#4CAF50', fontSize: 14, fontWeight: 'bold' }}>👤 {name}</Text>
-          {plate ? <Text style={{ color: '#fff', fontSize: 11, marginTop: 2 }}>🎫 Plaka: {plate}</Text> : null}
+      {/* Üst Bar: Profil Bilgisi + Çıkış */}
+      <View style={styles.topBar}>
+        <View style={styles.profileCard}>
+          <View style={styles.avatarCircle}>
+            <Text style={styles.avatarText}>{(name || '?').trim().charAt(0).toUpperCase()}</Text>
+          </View>
+          <View style={{ flexShrink: 1 }}>
+            <Text style={styles.profileName} numberOfLines={1}>{name || 'Sürücü'}</Text>
+            {plate ? (
+              <View style={styles.plateBadge}>
+                <MaterialIcons name="directions-car" size={11} color="#0a0a0a" />
+                <Text style={styles.plateBadgeText}>{plate}</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
-      </View>
 
-      {/* Bağlantıyı Kes Butonu */}
-      <View style={{ position: 'absolute', top: 65, right: 20, zIndex: 100 }}>
         <TouchableOpacity
-          style={{ backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8 }}
+          style={styles.iconButton}
           onPress={async () => {
             try {
               // 1. Sunucu tarafında token versiyonunu artırarak çıkış yap (Token Invalidation)
@@ -1849,13 +1879,13 @@ export default function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone })
               }).catch(() => {});
-              
+
               if (socket) socket.disconnect();
               setIsConnected(false);
-              
+
               // 2. Güvenli depodaki refresh token'ı sil
               await SecureStore.deleteItemAsync('refreshToken');
-              
+
               // 3. Kalıntıları sil ve state'i sıfırla
               await AsyncStorage.removeItem('activeSOSRoom');
               setName("");
@@ -1871,15 +1901,18 @@ export default function App() {
             } catch (e) { }
           }}
         >
-          <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>Çıkış Yap</Text>
+          <MaterialIcons name="logout" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
       {/* Üstteki SOS Alert Banner */}
       {sosNotifications.map((notification, index) => (
-        <View key={notification.roomName} style={[styles.topBanner, { position: 'relative', top: 0, marginBottom: 15 }]}>
+        <View key={notification.roomName} style={[styles.topBanner, { top: 130 + (index * 92) }]}>
+          <View style={styles.bannerIconWrap}>
+            <MaterialIcons name="campaign" size={20} color="#ff3b30" />
+          </View>
           <View style={styles.bannerInfo}>
-            <Text style={styles.bannerTitle}>🚨 ACİL YARDIM ÇAĞRISI!</Text>
-            <Text style={styles.bannerSubtitle}>{notification.from} ({notification.distance.toFixed(2)} km)</Text>
+            <Text style={styles.bannerTitle}>ACİL YARDIM ÇAĞRISI</Text>
+            <Text style={styles.bannerSubtitle}>{notification.from} · {notification.distance.toFixed(2)} km</Text>
           </View>
           <TouchableOpacity style={styles.joinButton} onPress={() => joinSOSRoom(notification.roomName, notification.from)}>
             <Text style={styles.joinButtonText}>Katıl</Text>
@@ -1887,111 +1920,60 @@ export default function App() {
         </View>
       ))}
 
-      {/* Profile Card */}
-      <View style={styles.profileCard}>
-        <View style={styles.profileInfoRow}>
-          <View style={styles.profileIconWrapper}>
-            <MaterialIcons name="person" size={32} color="#fff" />
-          </View>
-          <View style={styles.profileTextWrapper}>
-            <Text style={styles.profileName}>{name || 'Kullanıcı'}</Text>
-            {plate ? (
-              <View style={styles.plateRow}>
-                <Text style={styles.taxiEmoji}>🚕</Text>
-                <Text style={styles.plateText}>{plate}</Text>
-              </View>
-            ) : null}
-          </View>
+      {/* Ana Ekran Ortalanmış Harita (Gizlendi) - Tamamen Silindi */}
+
+      {/* Ortalanmış SOS Butonu */}
+      <View style={styles.homeSosContainer}>
+        <View style={styles.sosButtonBox}>
+          {!sosActive && (
+            <>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.radarRing,
+                  {
+                    opacity: radarAnim1.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
+                    transform: [{ scale: radarAnim1.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }) }],
+                  },
+                ]}
+              />
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.radarRing,
+                  {
+                    opacity: radarAnim2.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
+                    transform: [{ scale: radarAnim2.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }) }],
+                  },
+                ]}
+              />
+            </>
+          )}
+          {!sosActive ? (
+            <TouchableOpacity onPress={handleSOS} activeOpacity={0.85} style={styles.sosTouchable}>
+              <Animated.View style={styles.sosButton}>
+                <MaterialIcons name="warning" size={26} color="#fff" />
+                <Text style={styles.sosText}>SOS</Text>
+              </Animated.View>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity onPress={() => setPageMode('room')} activeOpacity={0.85} style={styles.sosTouchable}>
+              <Animated.View style={[styles.sosButton, { backgroundColor: '#ff9800', shadowColor: '#ff9800', transform: [{ scale: pulseAnim }] }]}>
+                <MaterialIcons name="campaign" size={24} color="#fff" />
+                <Text style={[styles.sosText, { fontSize: 20, textAlign: 'center' }]}>SOS'e Dön</Text>
+              </Animated.View>
+            </TouchableOpacity>
+          )}
         </View>
-        <TouchableOpacity
-          style={styles.logoutButton}
-          onPress={async () => {
-            try {
-              fetch(`${serverIp}/api/logout`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone })
-              }).catch(() => {});
-              
-              if (socket) socket.disconnect();
-              setIsConnected(false);
-              
-              await SecureStore.deleteItemAsync('refreshToken');
-              await AsyncStorage.removeItem('activeSOSRoom');
-              setName("");
-              setPlate("");
-              setPhone("");
-              setAccessToken(null);
-              setAuthStatus(null);
-              setIsAutoLoginTriggered(false);
-            } catch (e) { }
-          }}
-        >
-          <MaterialIcons name="logout" size={16} color="#ff3b30" />
-          <Text style={styles.logoutText}>Çıkış Yap</Text>
+      </View>
+
+      {/* Sol Alt Profil Düzenle Butonu */}
+      <View style={styles.bottomBar}>
+        <TouchableOpacity style={styles.editProfileBtn} onPress={() => setShowProfileModal(true)} activeOpacity={0.85}>
+          <MaterialIcons name="edit" size={16} color="#fff" />
+          <Text style={styles.editProfileText}>Profili Düzenle</Text>
         </TouchableOpacity>
       </View>
-
-      {/* System Status Card */}
-      <View style={styles.statusCard}>
-        <View style={styles.statusIconWrapper}>
-          <MaterialIcons name="verified-user" size={24} color="#4CAF50" />
-        </View>
-        <View style={styles.statusTextWrapper}>
-          <Text style={styles.statusTitle}>Sistem Aktif</Text>
-        </View>
-        <View style={styles.onlineBadge}>
-          <MaterialIcons name="signal-cellular-alt" size={14} color="#4CAF50" />
-          <Text style={styles.onlineText}>Çevrimiçi</Text>
-        </View>
-      </View>
-
-      {/* SOS Button Area */}
-      <View style={styles.sosArea}>
-        <TouchableOpacity onPress={sosActive ? () => setPageMode('room') : handleSOS} activeOpacity={0.8}>
-          <View style={[styles.sosButtonGlow, sosActive && { backgroundColor: 'rgba(255, 204, 0, 0.15)' }]}>
-            <Animated.View style={[styles.sosButtonInner, sosActive && { transform: [{ scale: pulseAnim }], backgroundColor: '#ffcc00' }]}>
-              {!sosActive && <MaterialIcons name="campaign" size={48} color="white" />}
-              <Text style={[styles.sosMainText, sosActive && { color: '#000' }]}>SOS</Text>
-              <Text style={[styles.sosSubText, sosActive && { color: '#000' }]}>{sosActive ? "SOS'e Dön" : "Acil Yardım Çağrısı"}</Text>
-            </Animated.View>
-          </View>
-        </TouchableOpacity>
-        <Text style={styles.sosInfoText}>
-          Acil bir durumda SOS butonuna basın.{"\n"}Konumunuz anında paylaşılacak ve en yakın{"\n"}taksicilere bildirilecektir.
-        </Text>
-      </View>
-
-      {/* Feature Grid */}
-      <View style={styles.featureGrid}>
-        <View style={styles.featureCard}>
-          <MaterialIcons name="location-on" size={28} color="#ff3b30" />
-          <Text style={styles.featureTitle}>Konum Paylaşımı</Text>
-          <Text style={styles.featureDesc}>Anlık konumunuz paylaşılır.</Text>
-        </View>
-        <View style={styles.featureCard}>
-          <MaterialIcons name="people" size={28} color="#ff3b30" />
-          <Text style={styles.featureTitle}>Taksicilere Bildirim</Text>
-          <Text style={styles.featureDesc}>Yakındaki taksiciler anında bilgilendirilir.</Text>
-        </View>
-        <View style={styles.featureCard}>
-          <MaterialIcons name="gpp-good" size={28} color="#ff3b30" />
-          <Text style={styles.featureTitle}>Acil Durum Odası</Text>
-          <Text style={styles.featureDesc}>Acil durum odası aktif hale gelir.</Text>
-        </View>
-      </View>
-
-      {/* Edit Profile Button */}
-      <TouchableOpacity style={styles.editProfileCard} onPress={() => setShowProfileModal(true)}>
-        <View style={styles.editProfileIconWrapper}>
-          <MaterialIcons name="person" size={28} color="white" />
-        </View>
-        <View style={styles.editProfileTextWrapper}>
-          <Text style={styles.editProfileTitle}>Profili Düzenle</Text>
-          <Text style={styles.editProfileDesc}>Ad, plaka ve diğer bilgilerinizi güncelleyin.</Text>
-        </View>
-        <MaterialIcons name="chevron-right" size={24} color="#ccc" />
-      </TouchableOpacity>
 
       {/* Profil Düzenleme Modalı */}
       <Modal visible={showProfileModal} animationType="slide" transparent={true} onRequestClose={() => setShowProfileModal(false)}>
@@ -2038,7 +2020,6 @@ export default function App() {
       </Modal>
 
     </View>
-  </View>
   );
 }
 
@@ -2055,52 +2036,33 @@ const styles = StyleSheet.create({
   connectButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
 
   // Ana Ekran (Home) Görünümü
-  topBanner: { backgroundColor: '#ff3b30', borderRadius: 12, padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5 },
+  topBar: { position: 'absolute', top: 60, left: 20, right: 20, zIndex: 100, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  profileCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 16, maxWidth: '78%' },
+  avatarCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#4CAF50', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  avatarText: { color: '#0a0a0a', fontWeight: '800', fontSize: 15 },
+  profileName: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  plateBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4CAF50', alignSelf: 'flex-start', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginTop: 4 },
+  plateBadgeText: { color: '#0a0a0a', fontSize: 10, fontWeight: '800', marginLeft: 3 },
+  iconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', alignItems: 'center' },
+
+  topBanner: { position: 'absolute', top: 50, width: '90%', backgroundColor: '#1a1a1a', borderRadius: 16, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 10, borderWidth: 1, borderColor: '#ff3b30', shadowColor: '#ff3b30', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 8 },
+  bannerIconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,59,48,0.15)', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
   bannerInfo: { flex: 1 },
-  bannerTitle: { color: 'white', fontWeight: '900', fontSize: 16 },
-  bannerSubtitle: { color: 'white', fontSize: 14, marginTop: 2 },
-  joinButton: { backgroundColor: 'white', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 8 },
-  joinButtonText: { color: '#ff3b30', fontWeight: 'bold' },
+  bannerTitle: { color: '#ff3b30', fontWeight: '900', fontSize: 14, letterSpacing: 0.3 },
+  bannerSubtitle: { color: 'rgba(255,255,255,0.75)', fontSize: 13, marginTop: 2 },
+  joinButton: { backgroundColor: '#ff3b30', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
+  joinButtonText: { color: 'white', fontWeight: '800', fontSize: 13 },
 
-  homeContainer: { flex: 1, backgroundColor: '#0a0a0a' },
-  homeContentContainer: { flex: 1, paddingHorizontal: 20, paddingBottom: 20, paddingTop: Platform.OS === 'ios' ? 50 : 30, justifyContent: 'space-between' },
-  
-  profileCard: { backgroundColor: '#1a1a1a', borderRadius: 15, padding: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 0 },
-  profileInfoRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  profileIconWrapper: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
-  profileTextWrapper: { flex: 1 },
-  profileName: { color: 'white', fontSize: 16, fontWeight: 'bold' },
-  plateRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
-  taxiEmoji: { fontSize: 14, marginRight: 5 },
-  plateText: { color: '#ccc', fontSize: 14 },
-  logoutButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#330000', backgroundColor: '#1a0000' },
-  logoutText: { color: '#ff3b30', fontSize: 12, fontWeight: 'bold', marginLeft: 4 },
-  
-  statusCard: { backgroundColor: '#1a1a1a', borderRadius: 15, padding: 15, flexDirection: 'row', alignItems: 'center', marginBottom: 0 },
-  statusIconWrapper: { width: 40, height: 40, borderRadius: 8, backgroundColor: 'rgba(76, 175, 80, 0.2)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
-  statusTextWrapper: { flex: 1 },
-  statusTitle: { color: '#4CAF50', fontSize: 15, fontWeight: 'bold', marginBottom: 2 },
-  statusDescription: { color: '#888', fontSize: 11, lineHeight: 16 },
-  onlineBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(76, 175, 80, 0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, alignSelf: 'flex-start' },
-  onlineText: { color: '#4CAF50', fontSize: 11, fontWeight: 'bold', marginLeft: 4 },
+  homeSosContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' },
+  sosButtonBox: { width: 150, height: 150, justifyContent: 'center', alignItems: 'center' },
+  sosTouchable: { width: 150, height: 150, justifyContent: 'center', alignItems: 'center' },
+  radarRing: { position: 'absolute', width: 150, height: 150, borderRadius: 75, borderWidth: 2, borderColor: '#ff3b30' },
+  sosButton: { width: 150, height: 150, borderRadius: 75, backgroundColor: '#ff3b30', justifyContent: 'center', alignItems: 'center', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20, elevation: 10 },
+  sosText: { color: 'white', fontSize: 32, fontWeight: '900', marginTop: 2 },
 
-  sosArea: { flex: 1, alignItems: 'center', justifyContent: 'center', marginBottom: 0, marginVertical: 10 },
-  sosButtonGlow: { width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(255, 59, 48, 0.15)', justifyContent: 'center', alignItems: 'center' },
-  sosButtonInner: { width: 170, height: 170, borderRadius: 85, backgroundColor: '#ff3b30', justifyContent: 'center', alignItems: 'center', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 30, elevation: 15 },
-  sosMainText: { color: 'white', fontSize: 32, fontWeight: '900', marginTop: 5 },
-  sosSubText: { color: 'white', fontSize: 13, marginTop: 0 },
-  sosInfoText: { color: '#888', fontSize: 12, textAlign: 'center', marginTop: 15, lineHeight: 18 },
-
-  featureGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
-  featureCard: { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 12, padding: 15, marginHorizontal: 4, alignItems: 'center' },
-  featureTitle: { color: 'white', fontSize: 12, fontWeight: 'bold', textAlign: 'center', marginTop: 10, marginBottom: 5 },
-  featureDesc: { color: '#888', fontSize: 10, textAlign: 'center' },
-
-  editProfileCard: { backgroundColor: '#3a0f12', borderRadius: 15, padding: 15, flexDirection: 'row', alignItems: 'center' },
-  editProfileIconWrapper: { width: 50, height: 50, borderRadius: 10, backgroundColor: '#ff3b30', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
-  editProfileTextWrapper: { flex: 1 },
-  editProfileTitle: { color: 'white', fontSize: 16, fontWeight: 'bold', marginBottom: 2 },
-  editProfileDesc: { color: '#ccc', fontSize: 12 },
+  bottomBar: { position: 'absolute', bottom: 40, left: 20, zIndex: 100 },
+  editProfileBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 22 },
+  editProfileText: { color: '#fff', fontWeight: '700', fontSize: 13, marginLeft: 6 },
 
   // Oda (Room) Görünümü
   roomContainer: { flex: 1, backgroundColor: '#111' },
