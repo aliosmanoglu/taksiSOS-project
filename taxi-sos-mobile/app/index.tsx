@@ -127,6 +127,30 @@ async function registerForPushNotificationsAsync() {
   return token;
 }
 
+type AuthFieldProps = {
+  icon: React.ComponentProps<typeof MaterialIcons>['name'];
+  rightIcon?: React.ComponentProps<typeof MaterialIcons>['name'];
+  onRightIconPress?: () => void;
+} & React.ComponentProps<typeof TextInput>;
+
+function AuthField({ icon, rightIcon, onRightIconPress, style, ...inputProps }: AuthFieldProps) {
+  return (
+    <View style={styles.authFieldWrap}>
+      <MaterialIcons name={icon} size={16} color="#888" style={styles.authFieldIconLeft} />
+      <TextInput
+        style={[styles.input, { paddingLeft: 42, paddingRight: rightIcon ? 40 : 16 }, style]}
+        placeholderTextColor="#999"
+        {...inputProps}
+      />
+      {rightIcon ? (
+        <TouchableOpacity onPress={onRightIconPress} style={styles.authFieldIconRight}>
+          <MaterialIcons name={rightIcon} size={20} color="#999" />
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
 export default function App() {
   const { height } = Dimensions.get('window');
   const lastNotificationResponse = Notifications.useLastNotificationResponse();
@@ -280,6 +304,9 @@ export default function App() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const radarAnim1 = useRef(new Animated.Value(0)).current;
   const radarAnim2 = useRef(new Animated.Value(0)).current;
+  const liveDotAnim = useRef(new Animated.Value(1)).current;
+  const micPulseAnim = useRef(new Animated.Value(1)).current;
+  const eqAnims = useRef([0, 1, 2, 3].map(() => new Animated.Value(0.4))).current;
   const recordingRef = useRef<Audio.Recording | null>(null);
   const mapRef = useRef<MapView>(null);
 
@@ -322,7 +349,7 @@ export default function App() {
 
   const { isMicMuted, isChannelLocked, lockedBy, requestPtt, stopPtt } = usePTT(socket, activeSOSRoom);
   const [pttHoldTime, setPttHoldTime] = useState(0);
-  const pttTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pttTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -713,6 +740,51 @@ export default function App() {
       };
     }
   }, [sosActive]);
+
+  // SOS Odası başlığındaki "canlı" noktası
+  useEffect(() => {
+    if (pageMode === 'room') {
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(liveDotAnim, { toValue: 0.35, duration: 800, useNativeDriver: true }),
+          Animated.timing(liveDotAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+        ])
+      );
+      loop.start();
+      return () => {
+        loop.stop();
+        liveDotAnim.setValue(1);
+      };
+    }
+  }, [pageMode]);
+
+  // Telsizde konuşurken mikrofonun nabzı ve yanındaki ses göstergesi
+  useEffect(() => {
+    const isTalking = !isMicMuted || pttHoldTime > 0;
+    if (isTalking) {
+      const pulseLoop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(micPulseAnim, { toValue: 1.045, duration: 600, useNativeDriver: true }),
+          Animated.timing(micPulseAnim, { toValue: 1, duration: 600, useNativeDriver: true }),
+        ])
+      );
+      const eqLoops = eqAnims.map((anim, i) => Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 150),
+          Animated.timing(anim, { toValue: 1, duration: 450, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0.4, duration: 450, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        ])
+      ));
+      pulseLoop.start();
+      eqLoops.forEach(loop => loop.start());
+      return () => {
+        pulseLoop.stop();
+        micPulseAnim.setValue(1);
+        eqLoops.forEach(loop => loop.stop());
+        eqAnims.forEach(anim => anim.setValue(0.4));
+      };
+    }
+  }, [isMicMuted, pttHoldTime]);
 
   // --- GERÇEK CANLI KONUM TAKİBİ ---
   useEffect(() => {
@@ -1523,89 +1595,102 @@ export default function App() {
                 )}
                 {(authStatus === null || authStatus === 'not_found') && authMode === 'login' && (
                   <>
-                    <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
-                    <View style={{ width: '100%', flexDirection: 'row', alignItems: 'center' }}>
-                      <TextInput style={[styles.input, { flex: 1 }]} value={password} onChangeText={setPassword} placeholder="Şifre" secureTextEntry={!showPassword} placeholderTextColor="#999" />
-                      <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 15, top: 15 }}>
-                         <MaterialIcons name={showPassword ? "visibility-off" : "visibility"} size={24} color="#999" />
-                      </TouchableOpacity>
-                    </View>
-                    
+                    <Text style={styles.authHeading}>Tekrar hoş geldin, devam etmek için giriş yap</Text>
+
+                    <AuthField icon="call" value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" />
+                    <AuthField
+                      icon="lock-outline"
+                      value={password}
+                      onChangeText={setPassword}
+                      placeholder="Şifre"
+                      secureTextEntry={!showPassword}
+                      rightIcon={showPassword ? "visibility-off" : "visibility"}
+                      onRightIconPress={() => setShowPassword(!showPassword)}
+                    />
+
                     <TouchableOpacity style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} onPress={handleLoginClick} disabled={isConnecting}>
                       {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Giriş Yap</Text>}
                     </TouchableOpacity>
 
-                    <View style={{ marginTop: 20, alignItems: 'center' }}>
-                      <Text style={{ color: '#ccc', fontSize: 14 }}>Hesabın yok mu?</Text>
-                      <TouchableOpacity onPress={() => setAuthMode('register')} style={{ marginTop: 10 }}>
-                        <Text style={{ color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }}>Kayıt Ol</Text>
-                      </TouchableOpacity>
+                    <View style={styles.authSwitchRow}>
+                      <Text style={styles.authSwitchText}>
+                        Hesabın yok mu?{' '}
+                        <Text style={styles.authSwitchAction} onPress={() => setAuthMode('register')}>Kayıt Ol</Text>
+                      </Text>
                     </View>
                   </>
                 )}
 
                 {(authStatus === null || authStatus === 'not_found') && authMode === 'register' && (
                   <>
-                    <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
-                    <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
-                    <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" placeholderTextColor="#999" />
-                    
-                    <View style={{ width: '100%', flexDirection: 'row', alignItems: 'center' }}>
-                      <TextInput style={[styles.input, { flex: 1 }]} value={password} onChangeText={setPassword} placeholder="Şifre Belirleyin" secureTextEntry={!showPassword} placeholderTextColor="#999" />
-                      <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 15, top: 15 }}>
-                         <MaterialIcons name={showPassword ? "visibility-off" : "visibility"} size={24} color="#999" />
-                      </TouchableOpacity>
-                    </View>
-                    
-                    <TextInput style={styles.input} value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Şifreyi Tekrar Girin" secureTextEntry={!showPassword} placeholderTextColor="#999" />
-                    
-                    <View style={{ marginTop: 10, marginBottom: 20 }}>
-                        <Text style={{ color: '#ff3b30', fontSize: 13, marginBottom: 10, textAlign: 'center' }}>Lütfen Şoför Tanıtım Kartınızı yükleyin.</Text>
+                    <Text style={styles.authHeading}>Aramıza katıl, birkaç bilgiyle şoför hesabını oluştur</Text>
+
+                    <AuthField icon="person-outline" value={name} onChangeText={setName} placeholder="İsim Soyisim" />
+                    <AuthField icon="call" value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" />
+                    <AuthField icon="directions-car" value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" />
+                    <AuthField
+                      icon="lock-outline"
+                      value={password}
+                      onChangeText={setPassword}
+                      placeholder="Şifre Belirleyin"
+                      secureTextEntry={!showPassword}
+                      rightIcon={showPassword ? "visibility-off" : "visibility"}
+                      onRightIconPress={() => setShowPassword(!showPassword)}
+                    />
+                    <AuthField icon="lock-outline" value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Şifreyi Tekrar Girin" secureTextEntry={!showPassword} />
+
+                    <View style={styles.uploadZone}>
+                        <Text style={styles.uploadHintText}>Lütfen Şoför Tanıtım Kartınızı yükleyin.</Text>
                         {imageBase64 ? (
-                           <Image source={{ uri: 'data:image/jpeg;base64,' + imageBase64 }} style={{ width: '100%', height: 150, borderRadius: 10, marginBottom: 10 }} resizeMode="cover" />
+                           <View style={styles.uploadPreviewWrap}>
+                             <Image source={{ uri: 'data:image/jpeg;base64,' + imageBase64 }} style={{ width: '100%', height: 150 }} resizeMode="cover" />
+                             <View style={styles.uploadCheckBadge}>
+                               <MaterialIcons name="check" size={14} color="#0a0a0a" />
+                             </View>
+                           </View>
                         ) : null}
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 }}>
-                           <TouchableOpacity style={{ flex: 1, backgroundColor: '#333', padding: 12, borderRadius: 10, marginRight: 5, alignItems: 'center' }} onPress={async () => {
+                        <View style={styles.uploadRow}>
+                           <TouchableOpacity style={styles.uploadBtn} onPress={async () => {
                               if (!cameraPermission?.granted) await requestCameraPermission();
                               setIsCameraScanning(true);
                            }}>
-                              <MaterialIcons name="camera-alt" size={24} color="#fff" />
-                              <Text style={{ color: '#fff', fontSize: 12, marginTop: 5 }}>Kamera</Text>
+                              <MaterialIcons name="camera-alt" size={22} color="#fff" />
+                              <Text style={styles.uploadBtnText}>Kamera</Text>
                            </TouchableOpacity>
-                           <TouchableOpacity style={{ flex: 1, backgroundColor: '#333', padding: 12, borderRadius: 10, marginLeft: 5, alignItems: 'center' }} onPress={() => pickImage(false)}>
-                              <MaterialIcons name="photo-library" size={24} color="#fff" />
-                              <Text style={{ color: '#fff', fontSize: 12, marginTop: 5 }}>Galeri</Text>
+                           <TouchableOpacity style={styles.uploadBtn} onPress={() => pickImage(false)}>
+                              <MaterialIcons name="photo-library" size={22} color="#fff" />
+                              <Text style={styles.uploadBtnText}>Galeri</Text>
                            </TouchableOpacity>
-                        </View>
-
-                        {/* Legal Checkboxes */}
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                           <TouchableOpacity onPress={() => setIsTermsChecked(!isTermsChecked)} style={{ marginRight: 10 }}>
-                              <MaterialIcons name={isTermsChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
-                           </TouchableOpacity>
-                           <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
-                              <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'terms'})}>Kullanıcı Sözleşmesi</Text>'ni okudum ve kabul ediyorum.
-                           </Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                           <TouchableOpacity onPress={() => setIsKvkkChecked(!isKvkkChecked)} style={{ marginRight: 10 }}>
-                              <MaterialIcons name={isKvkkChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
-                           </TouchableOpacity>
-                           <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
-                              <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'kvkk'})}>KVKK Aydınlatma ve Açık Rıza Metni</Text>'ni okudum, anladım ve kabul ediyorum.
-                           </Text>
                         </View>
                     </View>
 
-                    <TouchableOpacity style={[styles.connectButton, { backgroundColor: '#ff3b30' }, isConnecting && { opacity: 0.7 }]} onPress={registerUser} disabled={isConnecting}>
+                    {/* Legal Checkboxes */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                       <TouchableOpacity onPress={() => setIsTermsChecked(!isTermsChecked)} style={{ marginRight: 10 }}>
+                          <MaterialIcons name={isTermsChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
+                       </TouchableOpacity>
+                       <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
+                          <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'terms'})}>Kullanıcı Sözleşmesi</Text>'ni okudum ve kabul ediyorum.
+                       </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                       <TouchableOpacity onPress={() => setIsKvkkChecked(!isKvkkChecked)} style={{ marginRight: 10 }}>
+                          <MaterialIcons name={isKvkkChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
+                       </TouchableOpacity>
+                       <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
+                          <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'kvkk'})}>KVKK Aydınlatma ve Açık Rıza Metni</Text>'ni okudum, anladım ve kabul ediyorum.
+                       </Text>
+                    </View>
+
+                    <TouchableOpacity style={[styles.connectButton, styles.connectButtonRed, isConnecting && { opacity: 0.7 }]} onPress={registerUser} disabled={isConnecting}>
                       {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Kayıt Ol</Text>}
                     </TouchableOpacity>
 
-                    <View style={{ marginTop: 20, alignItems: 'center' }}>
-                      <Text style={{ color: '#ccc', fontSize: 14 }}>Zaten hesabın var mı?</Text>
-                      <TouchableOpacity onPress={() => setAuthMode('login')} style={{ marginTop: 10 }}>
-                        <Text style={{ color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }}>Giriş Yap</Text>
-                      </TouchableOpacity>
+                    <View style={styles.authSwitchRow}>
+                      <Text style={styles.authSwitchText}>
+                        Zaten hesabın var mı?{' '}
+                        <Text style={styles.authSwitchAction} onPress={() => setAuthMode('login')}>Giriş Yap</Text>
+                      </Text>
                     </View>
                   </>
                 )}
@@ -1622,12 +1707,15 @@ export default function App() {
     return (
       <View style={styles.roomContainer}>
         <View style={styles.roomHeader}>
-          <TouchableOpacity style={styles.headerButton} onPress={() => setPageMode('home')}>
-            <Text style={styles.headerButtonText}>⬅ Ana Sayfa</Text>
+          <TouchableOpacity style={styles.iconButton} onPress={() => setPageMode('home')}>
+            <MaterialIcons name="arrow-back" size={18} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.roomTitle}>ACİL DURUM ODASI</Text>
+          <View style={styles.roomTitleWrap}>
+            <Animated.View style={[styles.liveDot, { opacity: liveDotAnim }]} />
+            <Text style={styles.roomTitle} numberOfLines={1}>ACİL DURUM ODASI</Text>
+          </View>
           {socket && activeSOSRoom === "sos_room_" + phone ? (
-            <TouchableOpacity style={styles.headerButtonRed} onPress={() => {
+            <TouchableOpacity style={styles.endButton} onPress={() => {
               Alert.alert(
                 "Emin misiniz?",
                 "SOS çağrısını bitirmek istediğinize emin misiniz? Bu işlem odayı herkes için kapatacaktır.",
@@ -1637,11 +1725,13 @@ export default function App() {
                 ]
               );
             }}>
-              <Text style={styles.headerButtonText}>SOS BİTİR</Text>
+              <MaterialIcons name="stop" size={14} color="#fff" />
+              <Text style={styles.endButtonText}>SOS BİTİR</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={styles.headerButtonRed} onPress={leaveRoom}>
-              <Text style={styles.headerButtonText}>Çıkış Yap</Text>
+            <TouchableOpacity style={styles.endButton} onPress={leaveRoom}>
+              <MaterialIcons name="logout" size={14} color="#fff" />
+              <Text style={styles.endButtonText}>Çıkış Yap</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -1663,6 +1753,7 @@ export default function App() {
             {socket && activeSOSRoom === "sos_room_" + phone ? (
               <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz (SOS)">
                 <View style={styles.sosMarkerContainer}>
+                  <View style={styles.sosMarkerRing} />
                   <View style={styles.sosBadge}>
                     <Text style={styles.sosBadgeText}>SOS</Text>
                   </View>
@@ -1691,6 +1782,7 @@ export default function App() {
                     title={u.name + " (SOS)"}
                   >
                     <View style={styles.sosMarkerContainer}>
+                      <View style={styles.sosMarkerRing} />
                       <View style={styles.sosBadge}>
                         <Text style={styles.sosBadgeText}>SOS</Text>
                       </View>
@@ -1714,43 +1806,74 @@ export default function App() {
             })}
           </MapView>
 
-          <TouchableOpacity style={[styles.focusButton, { bottom: 20, left: 20 }]} onPress={() => setShowChat(true)}>
-            <Text style={styles.focusButtonText}>💬 Sohbet</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.focusButton, { bottom: 20, right: 20, width: 44, height: 44, paddingHorizontal: 0, paddingVertical: 0, justifyContent: 'center', alignItems: 'center', borderRadius: 22 }]} onPress={focusOnMe}>
-            <MaterialIcons name="my-location" size={24} color="white" />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.focusButton, { top: 20, right: 20 }]} onPress={focusOnSOS}>
-            <Text style={styles.focusButtonText}>📍 SOS'a Odaklan</Text>
+          <View style={styles.occupancyChip}>
+            <View style={styles.occupancyDot} />
+            <Text style={styles.occupancyChipText}>{roomUsers.length} kişi çevrimiçi</Text>
+          </View>
+
+          <View style={styles.mapControls}>
+            <TouchableOpacity style={styles.mapControlBtn} onPress={focusOnSOS}>
+              <MaterialIcons name="location-on" size={18} color="white" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.mapControlBtn} onPress={focusOnMe}>
+              <MaterialIcons name="my-location" size={18} color="white" />
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity style={styles.chatFab} onPress={() => setShowChat(true)}>
+            <MaterialIcons name="chat-bubble" size={14} color="white" />
+            <Text style={styles.chatFabText}>Sohbet</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.pttBox}>
           {activeSOSRoom ? (
             <>
-              <View style={styles.pttStatusRow}>
-                <View style={[styles.pttStatusDot, (!isMicMuted || pttHoldTime > 0) ? { backgroundColor: '#4CAF50' } : { backgroundColor: '#555' }]} />
-                <Text style={styles.pttStatusTextNew}>{(!isMicMuted || pttHoldTime > 0) ? 'Ses yayını aktif' : 'Ses yayını kapalı'}</Text>
-                <Text style={styles.pttTimerText}>{formatDuration(pttHoldTime * 1000)}</Text>
-              </View>
-              <Text style={styles.pttInstruction}>Konuşmak için mikrofonu basılı tutun.</Text>
-              
+              <View style={styles.pttDragHandle} />
+
+              {(!isMicMuted || pttHoldTime > 0) && (
+                <View style={styles.pttStatusRow}>
+                  <View style={[styles.pttStatusDot, { backgroundColor: '#4CAF50' }]} />
+                  <Text style={styles.pttStatusTextNew}>Ses yayını aktif</Text>
+                  <Text style={styles.pttTimerText}>{formatDuration(pttHoldTime * 1000)}</Text>
+                </View>
+              )}
+
+              {isChannelLocked && !!lockedBy ? (
+                <View style={styles.lockChip}>
+                  <MaterialIcons name="lock" size={14} color="#ff3b30" />
+                  <Text style={styles.lockChipText}>{lockedBy} konuşuyor…</Text>
+                </View>
+              ) : null}
+
               <View style={styles.pttButtonContainer}>
-                {(!isMicMuted || pttHoldTime > 0) ? <MaterialIcons name="graphic-eq" size={32} color="#ff3b30" style={{ marginRight: 20 }} /> : null}
+                {(!isMicMuted || pttHoldTime > 0) ? (
+                  <View style={styles.eqRow}>
+                    {eqAnims.map((anim, i) => (
+                      <Animated.View key={`eq-l-${i}`} style={[styles.eqBar, { height: [14, 26, 18, 30][i], transform: [{ scaleY: anim }] }]} />
+                    ))}
+                  </View>
+                ) : <View style={styles.eqRow} />}
+
                 <TouchableOpacity
                   style={[styles.pttButton, (!isMicMuted || pttHoldTime > 0) ? styles.pttButtonRecording : styles.pttButtonInactive, isChannelLocked && styles.pttButtonLocked]}
                   onPressIn={handleStartPtt}
                   onPressOut={handleStopPtt}
                   activeOpacity={0.8}
                 >
-                  <MaterialIcons name="mic" size={56} color="white" />
+                  <Animated.View style={{ transform: [{ scale: (!isMicMuted || pttHoldTime > 0) ? micPulseAnim : 1 }] }}>
+                    <MaterialIcons name="mic" size={56} color={isChannelLocked ? 'rgba(255,255,255,0.35)' : 'white'} />
+                  </Animated.View>
                 </TouchableOpacity>
-                {(!isMicMuted || pttHoldTime > 0) ? <MaterialIcons name="graphic-eq" size={32} color="#ff3b30" style={{ marginLeft: 20 }} /> : null}
+
+                {(!isMicMuted || pttHoldTime > 0) ? (
+                  <View style={styles.eqRow}>
+                    {eqAnims.map((anim, i) => (
+                      <Animated.View key={`eq-r-${i}`} style={[styles.eqBar, { height: [14, 26, 18, 30][i], transform: [{ scaleY: anim }] }]} />
+                    ))}
+                  </View>
+                ) : <View style={styles.eqRow} />}
               </View>
-              
-              {isChannelLocked && !!lockedBy ? (
-                <Text style={[styles.pttStatusText, { marginTop: 15 }]}>{lockedBy} konuşuyor...</Text>
-              ) : null}
             </>
           ) : null}
         </View>
@@ -1977,20 +2100,26 @@ export default function App() {
 
       {/* Profil Düzenleme Modalı */}
       <Modal visible={showProfileModal} animationType="slide" transparent={true} onRequestClose={() => setShowProfileModal(false)}>
-        <KeyboardAvoidingView style={styles.loginOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={[styles.loginBox, { backgroundColor: '#1e1e1e' }]}>
-            <Text style={styles.title}>Profili Düzenle</Text>
-            <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="İsim Soyisim" placeholderTextColor="#999" />
-            <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" placeholderTextColor="#999" />
-            <TextInput style={styles.input} value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34 T 1234)" autoCapitalize="characters" placeholderTextColor="#999" />
+        <KeyboardAvoidingView style={styles.profileSheetOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <TouchableOpacity style={{ flex: 1, width: '100%' }} activeOpacity={1} onPress={() => setShowProfileModal(false)} />
+          <View style={styles.profileSheet}>
+            <View style={styles.chatDragHandle} />
+            <View style={[styles.avatarCircle, styles.profileSheetAvatar]}>
+              <Text style={[styles.avatarText, { fontSize: 22 }]}>{(name || '?').trim().charAt(0).toUpperCase()}</Text>
+            </View>
 
-            <TouchableOpacity style={styles.connectButton} onPress={handleUpdateProfile}>
-              <Text style={styles.connectButtonText}>Güncelle</Text>
-            </TouchableOpacity>
+            <AuthField icon="person-outline" value={name} onChangeText={setName} placeholder="İsim Soyisim" />
+            <AuthField icon="call" value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" />
+            <AuthField icon="directions-car" value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34 T 1234)" autoCapitalize="characters" />
 
-            <TouchableOpacity style={{ marginTop: 20, alignItems: 'center' }} onPress={() => setShowProfileModal(false)}>
-              <Text style={{ color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }}>İptal</Text>
-            </TouchableOpacity>
+            <View style={styles.sheetActionsRow}>
+              <TouchableOpacity style={styles.ghostButton} onPress={() => setShowProfileModal(false)}>
+                <Text style={styles.ghostButtonText}>İptal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.connectButton, { flex: 1, marginTop: 0 }]} onPress={handleUpdateProfile}>
+                <Text style={styles.connectButtonText}>Güncelle</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -2030,10 +2159,34 @@ const styles = StyleSheet.create({
   // Login Ekranı
   loginOverlay: { flex: 1, width: '100%', backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
   loginBox: { width: '85%', backgroundColor: 'rgba(30,30,30,1)', padding: 25, borderRadius: 15, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 10 },
-  title: { fontSize: 24, fontWeight: 'bold', color: 'white', marginBottom: 20, textAlign: 'center' },
-  input: { backgroundColor: '#333', color: 'white', padding: 15, borderRadius: 8, marginBottom: 15, fontSize: 16 },
-  connectButton: { backgroundColor: '#4CAF50', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 10 },
+  input: { backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', color: 'white', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 14, marginBottom: 12, fontSize: 15 },
+  connectButton: { backgroundColor: '#4CAF50', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 10, shadowColor: '#4CAF50', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 14, elevation: 6 },
+  connectButtonRed: { backgroundColor: '#ff3b30', shadowColor: '#ff3b30' },
   connectButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
+
+  // Giriş / Kayıt / Profil ortak alan bileşenleri
+  authFieldWrap: { position: 'relative', width: '100%' },
+  authFieldIconLeft: { position: 'absolute', left: 14, top: 16, zIndex: 1 },
+  authFieldIconRight: { position: 'absolute', right: 14, top: 14 },
+  authHeading: { color: '#9c9aa4', fontSize: 12.5, textAlign: 'center', marginBottom: 18 },
+  authSwitchRow: { marginTop: 18, alignItems: 'center' },
+  authSwitchText: { color: '#9c9aa4', fontSize: 13 },
+  authSwitchAction: { color: '#ff3b30', fontWeight: '800' },
+
+  uploadZone: { borderWidth: 1.5, borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.22)', borderRadius: 16, padding: 12, marginTop: 6, marginBottom: 16 },
+  uploadHintText: { color: '#ff3b30', fontSize: 12, fontWeight: '700', textAlign: 'center', marginBottom: 10 },
+  uploadPreviewWrap: { position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 10 },
+  uploadCheckBadge: { position: 'absolute', top: 6, right: 6, width: 20, height: 20, borderRadius: 10, backgroundColor: '#4CAF50', justifyContent: 'center', alignItems: 'center' },
+  uploadRow: { flexDirection: 'row', gap: 8 },
+  uploadBtn: { flex: 1, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', padding: 12, borderRadius: 12, alignItems: 'center' },
+  uploadBtnText: { color: '#fff', fontSize: 11, fontWeight: '700', marginTop: 6 },
+
+  profileSheetOverlay: { flex: 1, width: '100%', backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  profileSheet: { backgroundColor: '#1e1e1e', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30, alignItems: 'center' },
+  profileSheetAvatar: { width: 56, height: 56, borderRadius: 28, marginRight: 0, marginBottom: 16, alignSelf: 'center' },
+  sheetActionsRow: { flexDirection: 'row', gap: 10, width: '100%', marginTop: 6 },
+  ghostButton: { flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', borderRadius: 14, paddingVertical: 15 },
+  ghostButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 
   // Ana Ekran (Home) Görünümü
   topBar: { position: 'absolute', top: 60, left: 20, right: 20, zIndex: 100, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
@@ -2066,34 +2219,44 @@ const styles = StyleSheet.create({
 
   // Oda (Room) Görünümü
   roomContainer: { flex: 1, backgroundColor: '#111' },
-  roomHeader: { height: 100, paddingTop: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, backgroundColor: '#111' },
-  headerButton: { flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#222', borderRadius: 8 },
-  headerButtonRed: { padding: 10, backgroundColor: '#cc0000', borderRadius: 8 },
-  headerButtonText: { color: '#ccc', fontWeight: 'bold' },
-  roomTitle: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  roomHeader: { height: 100, paddingTop: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, backgroundColor: '#111', gap: 10 },
+  roomTitleWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  liveDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#ff3b30' },
+  roomTitle: { color: 'white', fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+  endButton: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#ff3b30', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 9 },
+  endButtonText: { color: '#fff', fontWeight: '800', fontSize: 11 },
 
   roomMapBox: { flex: 1, backgroundColor: '#333' },
+  occupancyChip: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(12,12,15,0.74)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
+  occupancyDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#4CAF50' },
+  occupancyChipText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  mapControls: { position: 'absolute', top: 12, right: 12, gap: 8 },
+  mapControlBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(12,12,15,0.74)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', justifyContent: 'center', alignItems: 'center' },
+  chatFab: { position: 'absolute', bottom: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(12,12,15,0.8)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18 },
+  chatFabText: { color: '#fff', fontWeight: '700', fontSize: 12 },
 
-  pttBox: { backgroundColor: '#161616', borderTopLeftRadius: 30, borderTopRightRadius: 30, alignItems: 'center', padding: 30, paddingBottom: 50, minHeight: 280 },
+  pttBox: { backgroundColor: '#161616', borderTopLeftRadius: 30, borderTopRightRadius: 30, alignItems: 'center', padding: 20, paddingTop: 12, paddingBottom: 40, minHeight: 280 },
+  pttDragHandle: { width: 36, height: 4, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.18)', marginBottom: 16 },
   pttStatusRow: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'center', marginBottom: 10 },
   pttStatusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
   pttStatusTextNew: { color: 'white', fontSize: 16, fontWeight: 'bold', marginRight: 20 },
   pttTimerText: { color: '#ccc', fontSize: 16, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
-  pttInstruction: { color: '#888', fontSize: 14, marginBottom: 40 },
   pttButtonContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: '100%' },
   pttButton: { width: 130, height: 130, borderRadius: 65, justifyContent: 'center', alignItems: 'center' },
   pttButtonInactive: { backgroundColor: '#333', borderWidth: 2, borderColor: '#444' },
   pttButtonRecording: { backgroundColor: '#ff3b30', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20, elevation: 15 },
-  pttButtonLocked: { backgroundColor: '#cc0000', borderColor: '#880000' },
-  pttStatusText: { color: '#ff3b30', fontWeight: 'bold', fontSize: 16, marginTop: 15 },
+  pttButtonLocked: { backgroundColor: '#2a0d0d', borderColor: '#4d1414' },
+  lockChip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#ff3b30', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 30 },
+  lockChipText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  eqRow: { width: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  eqBar: { width: 4, backgroundColor: '#ff3b30', borderRadius: 2 },
 
-  sosMarkerContainer: { alignItems: 'center', justifyContent: 'center' },
+  sosMarkerContainer: { alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  sosMarkerRing: { position: 'absolute', width: 54, height: 54, borderRadius: 27, backgroundColor: 'rgba(255,59,48,0.25)' },
   sosBadge: { backgroundColor: '#ff3b30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, borderWidth: 2, borderColor: 'white', zIndex: 2, elevation: 5, marginBottom: -5 },
   sosBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
   carIcon: { fontSize: 36 },
   taxiMarker: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  focusButton: { position: 'absolute', backgroundColor: '#d32f2f', paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 5 },
-  focusButtonText: { color: 'white', fontWeight: 'bold' },
 
   chatModalContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.85)' },
   chatBox: { backgroundColor: '#1a1a1a', height: '70%', borderTopLeftRadius: 25, borderTopRightRadius: 25, display: 'flex' },
