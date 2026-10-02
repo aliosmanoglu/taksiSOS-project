@@ -256,6 +256,54 @@ app.post('/api/logout', async (req, res) => {
     }
 });
 
+app.post('/api/delete-account', async (req, res) => {
+    try {
+        const { phone, password } = req.body;
+        if (!phone || !password) return res.status(400).json({ error: 'Telefon numarası ve şifre gerekli' });
+
+        const cleanPhone = phone.replace(/\s/g, '');
+        const userDocRef = db.collection('users').doc(cleanPhone);
+        const userDoc = await userDocRef.get();
+        if (!userDoc.exists) return res.status(404).json({ error: 'Kullanıcı bulunamadı' });
+
+        const userData = userDoc.data();
+        if (!userData.password) {
+            return res.status(400).json({ error: 'Hesabınız eski sisteme ait ve şifresizdir. Lütfen destek ile iletişime geçin.' });
+        }
+
+        const isMatch = await bcrypt.compare(password, userData.password);
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Hatalı şifre' });
+        }
+
+        if (userData.idCardUrl) {
+            try {
+                const urlParts = userData.idCardUrl.split('/');
+                const fileName = urlParts.slice(urlParts.indexOf(bucket.name) + 1).join('/');
+                await bucket.file(fileName).delete();
+            } catch (err) {
+                console.error('Failed to delete image:', err);
+            }
+        }
+
+        await userDocRef.delete();
+
+        // Aktif socket bağlantısı varsa kopar (silinen hesapla uygulamayı kullanmaya devam edemesin)
+        const activeUser = users.find(u => u.phone === cleanPhone);
+        if (activeUser) {
+            const activeSocket = io.sockets.sockets.get(activeUser.id);
+            if (activeSocket) activeSocket.disconnect(true);
+        }
+
+        // Kayıtlı push token'ları temizle
+        registeredDevices = registeredDevices.filter(d => d.phone !== cleanPhone);
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.get('/api/admin/pending-users', async (req, res) => {
     try {
         const snapshot = await db.collection('users').where('status', '==', 'pending').get();
@@ -447,7 +495,11 @@ let users = [
 // Uygulamayı kapatan kişileri de hatırlamak için kalıcı (sunucu kapanana kadar) bir liste
 let registeredDevices = [];
 
+// Konum izni vermeyen kullanıcılar lat/lon göndermez (null). Sahte/varsayılan konum kullanılmaz.
+const isValidCoord = (lat, lon) => typeof lat === 'number' && typeof lon === 'number' && isFinite(lat) && isFinite(lon);
+
 const calculateKilometers = (lat1, lon1, lat2, lon2) => {
+    if (!isValidCoord(lat1, lon1) || !isValidCoord(lat2, lon2)) return null;
     const R = 6371; // Dünyanın yarıçapı (km)
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -524,8 +576,8 @@ io.on('connection', (socket) => {
                 name: data.name,
                 plate: data.plate || '',
                 phone: data.phone || '',
-                lat: data.lat,
-                lon: data.lon,
+                lat: isValidCoord(data.lat, data.lon) ? data.lat : null,
+                lon: isValidCoord(data.lat, data.lon) ? data.lon : null,
                 pushToken: data.pushToken || null,
                 activeRoom: null
             };
@@ -536,8 +588,8 @@ io.on('connection', (socket) => {
             if (data.pushToken) {
                 let existingDevice = registeredDevices.find(d => d.pushToken === data.pushToken);
                 if (existingDevice) {
-                    existingDevice.lat = data.lat;
-                    existingDevice.lon = data.lon;
+                    existingDevice.lat = user.lat;
+                    existingDevice.lon = user.lon;
                     existingDevice.name = data.name;
                     existingDevice.phone = data.phone;
                 } else {
@@ -545,8 +597,8 @@ io.on('connection', (socket) => {
                         pushToken: data.pushToken,
                         name: data.name,
                         phone: data.phone,
-                        lat: data.lat,
-                        lon: data.lon
+                        lat: user.lat,
+                        lon: user.lon
                     });
                 }
             }
@@ -560,6 +612,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on("location_update", (data) => {
+        if (!data || !isValidCoord(data.lat, data.lon)) return;
         let user = users.find(u => u.id === data.id);
 
         if (user) {
@@ -582,6 +635,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('live_location', (data) => {
+        if (!data || !isValidCoord(data.lat, data.lon)) return;
         let user = users.find(u => u.id === data.id);
         if (user) {
             user.lat = data.lat;
@@ -648,7 +702,7 @@ io.on('connection', (socket) => {
             creator: { name: user.name, phone: user.phone, plate: user.plate, id: user.id },
             helpers: [],
             messages: [],
-            locationHistory: [{
+            locationHistory: isValidCoord(lat, lon) ? [{
                 id: user.id,
                 name: user.name,
                 plate: user.plate,
@@ -656,7 +710,7 @@ io.on('connection', (socket) => {
                 lon: lon,
                 timestamp: Date.now(),
                 isCreator: true
-            }],
+            }] : [],
             location: { lat: lat, lon: lon }
         };
 
@@ -687,7 +741,9 @@ io.on('connection', (socket) => {
                         to: device.pushToken,
                         sound: 'default',
                         title: '🚨 ACİL YARDIM ÇAĞRISI!',
-                        body: `${user.name} isimli kullanıcıdan bir SOS çağrısı aldınız (${km.toFixed(2)} km)`,
+                        body: km !== null
+                            ? `${user.name} isimli kullanıcıdan bir SOS çağrısı aldınız (${km.toFixed(2)} km)`
+                            : `${user.name} isimli kullanıcıdan bir SOS çağrısı aldınız`,
                         data: { roomName: roomName, lat: lat, lon: lon, type: 'sos_alert', from: user.name },
                         priority: 'high'
                     });
@@ -751,15 +807,17 @@ io.on('connection', (socket) => {
             if (!existing) {
                 activeArchives[room].helpers.push({ name: user.name, phone: user.phone, plate: user.plate });
             }
-            activeArchives[room].locationHistory.push({
-                id: user.id,
-                name: user.name,
-                plate: user.plate,
-                lat: user.lat,
-                lon: user.lon,
-                timestamp: Date.now(),
-                isCreator: false
-            });
+            if (isValidCoord(user.lat, user.lon)) {
+                activeArchives[room].locationHistory.push({
+                    id: user.id,
+                    name: user.name,
+                    plate: user.plate,
+                    lat: user.lat,
+                    lon: user.lon,
+                    timestamp: Date.now(),
+                    isCreator: false
+                });
+            }
         }
 
         // Yeni katılana, eğer oda şu an konuşma/telsiz durumundaysa bilgi ver

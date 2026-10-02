@@ -244,7 +244,7 @@ function App() {
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                   url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                 />
-                {users.map(user => {
+                {users.filter(user => typeof user.lat === 'number' && typeof user.lon === 'number').map(user => {
                    const isSOS = user.activeRoom === `sos_room_${user.phone}`;
                    const isHelper = user.activeRoom && user.activeRoom.startsWith('sos_room_') && !isSOS;
                    

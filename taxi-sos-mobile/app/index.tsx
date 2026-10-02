@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, Alert, Animated, ScrollView, Dimensions, Modal, FlatList, KeyboardAvoidingView, Platform, LogBox, Image, ActivityIndicator, Easing, AppState } from 'react-native';
+import { View, Alert, Animated, Dimensions, FlatList, Platform, LogBox, Easing, AppState, Linking } from 'react-native';
 
 // --- Hata ve Uyarı Gizleme ---
 LogBox.ignoreLogs([
@@ -7,42 +7,30 @@ LogBox.ignoreLogs([
   'Unable to activate keep awake', // Android'de gereksiz keep-awake hatasını gizle
 ]);
 
-import MapView, { Marker } from 'react-native-maps';
+import MapView from 'react-native-maps';
 import * as Location from 'expo-location';
 import { io, Socket } from 'socket.io-client';
-import { Audio, InterruptionModeAndroid, InterruptionModeIOS, Video, ResizeMode } from 'expo-av';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import { useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
-// Notifee'yi dinamik olarak yüklüyoruz. Expo Go'da çökmeyi önlemek için try-catch kullanıyoruz.
-let notifee: any = null;
-let AndroidImportance: any = null;
-try {
-  const notifeeModule = require('@notifee/react-native');
-  notifee = notifeeModule.default;
-  AndroidImportance = notifeeModule.AndroidImportance;
-} catch (e) {
-  console.log("Notifee native module bulunamadı. Foreground Service Expo Go'da çalışmayacak.");
-  notifee = {
-    requestPermission: async () => { },
-    createChannel: async () => 'mock_channel',
-    displayNotification: async () => { },
-    stopForegroundService: async () => { }
-  };
-  AndroidImportance = { HIGH: 4 };
-}
+import { notifee, AndroidImportance } from '../lib/notifee';
 
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import * as Network from 'expo-network';
 import { jwtDecode } from 'jwt-decode';
-import { MaterialIcons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
-import * as Device from 'expo-device';
 import * as ImagePicker from 'expo-image-picker';
-import Constants from 'expo-constants';
 import { usePTT } from '../hooks/usePTT';
 import PCM from 'react-native-pcm-player-lite';
+import { AuthScreen } from '../components/screens/auth-screen';
+import { RoomScreen } from '../components/screens/room-screen';
+import { HomeScreen } from '../components/screens/home-screen';
+import { SosNotification, ChatMessage } from '../types/app';
+import { LEGAL_DOCUMENTS, LegalDocumentId } from '../constants/legal-documents';
+import { Notifications, registerForPushNotificationsAsync } from '../lib/notifications';
+import { logBreadcrumb, captureError } from '../lib/sentry';
 
 // DİKKAT: Bu değer, usePTT.ts içindeki bufferSize: 4096 (16kHz, 16bit Mono) ile senkron olmalıdır. Değişirse ikisi birden değişmelidir!
 const CHUNK_DURATION_MS = 128;
@@ -55,101 +43,7 @@ let pcmInterval: ReturnType<typeof setInterval> | null = null;
 let pcmStopTimer: ReturnType<typeof setTimeout> | null = null;
 let serverClockOffset = 0;
 
-// --- Hata Gizleme (Expo Go expo-notifications hatası için) ---
-const originalConsoleError = console.error;
-console.error = (...args) => {
-  if (typeof args[0] === 'string' && args[0].includes('expo-notifications')) {
-    return;
-  }
-  originalConsoleError(...args);
-};
-
-const Notifications = require('expo-notifications');
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
-
 const { width, height } = Dimensions.get('window');
-
-type SosNotification = {
-  from: string;
-  distance: number;
-  roomName: string;
-  lat: number;
-  lon: number;
-};
-
-type ChatMessage = {
-  id: string;
-  type: 'text' | 'audio';
-  content: string;
-  senderName: string;
-  senderId: string;
-  timestamp: number;
-  duration?: number;
-};
-
-
-
-async function registerForPushNotificationsAsync() {
-  let token;
-  if (Device.isDevice) {
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
-    }
-    if (finalStatus !== 'granted') {
-      console.log('Push bildirimleri için izin verilmedi!');
-      return null;
-    }
-    const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-    token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-  } else {
-    console.log('Push bildirimleri fiziksel bir cihazda çalışır.');
-  }
-
-  if (Platform.OS === 'android') {
-    Notifications.setNotificationChannelAsync('default', {
-      name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: '#FF231F7C',
-    });
-  }
-
-  return token;
-}
-
-type AuthFieldProps = {
-  icon: React.ComponentProps<typeof MaterialIcons>['name'];
-  rightIcon?: React.ComponentProps<typeof MaterialIcons>['name'];
-  onRightIconPress?: () => void;
-} & React.ComponentProps<typeof TextInput>;
-
-function AuthField({ icon, rightIcon, onRightIconPress, style, ...inputProps }: AuthFieldProps) {
-  return (
-    <View style={styles.authFieldWrap}>
-      <MaterialIcons name={icon} size={16} color="#888" style={styles.authFieldIconLeft} />
-      <TextInput
-        style={[styles.input, { paddingLeft: 42, paddingRight: rightIcon ? 40 : 16 }, style]}
-        placeholderTextColor="#999"
-        {...inputProps}
-      />
-      {rightIcon ? (
-        <TouchableOpacity onPress={onRightIconPress} style={styles.authFieldIconRight}>
-          <MaterialIcons name={rightIcon} size={20} color="#999" />
-        </TouchableOpacity>
-      ) : null}
-    </View>
-  );
-}
 
 export default function App() {
   const { height } = Dimensions.get('window');
@@ -200,9 +94,8 @@ export default function App() {
   const [isCardDetected, setIsCardDetected] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<any>(null);
-  const [isKvkkChecked, setIsKvkkChecked] = useState(false);
-  const [isTermsChecked, setIsTermsChecked] = useState(false);
-  const [showLegalModal, setShowLegalModal] = useState<{type: 'kvkk' | 'terms' | null}>({type: null});
+  const [acceptedLegalDocs, setAcceptedLegalDocs] = useState<Partial<Record<LegalDocumentId, boolean>>>({});
+  const [viewingLegalDoc, setViewingLegalDoc] = useState<LegalDocumentId | null>(null);
 
   const [mapRegion, setMapRegion] = useState({
     latitude: 41.0082,
@@ -210,6 +103,11 @@ export default function App() {
     latitudeDelta: 0.05,
     longitudeDelta: 0.05,
   });
+
+  // Konum izni verilmiş mi? İzin reddedilirse uygulama konumsuz çalışmaya devam eder (App Store 5.1.1(iv)).
+  const [locationGranted, setLocationGranted] = useState(false);
+  // Konum izni reddedildiğinde sahte/varsayılan koordinat sunucuya gönderilmez.
+  const [hasLocation, setHasLocation] = useState(false);
 
   const [pageMode, setPageMode] = useState<'home' | 'room'>('home');
   const [sosNotifications, setSosNotifications] = useState<SosNotification[]>([]);
@@ -349,7 +247,7 @@ export default function App() {
 
   const { isMicMuted, isChannelLocked, lockedBy, requestPtt, stopPtt } = usePTT(socket, activeSOSRoom);
   const [pttHoldTime, setPttHoldTime] = useState(0);
-  const pttTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pttTimerRef = useRef<NodeJS.Timeout | null>(null);
 
 
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
@@ -391,17 +289,18 @@ export default function App() {
     }
 
     const creatorUser = roomUsers.find(u => "sos_room_" + u.phone === activeSOSRoom);
-    if (creatorUser) {
+    const firstNotif = sosNotifications[0];
+    if (creatorUser && typeof creatorUser.lat === 'number' && typeof creatorUser.lon === 'number') {
       mapRef.current.animateToRegion({
         latitude: creatorUser.lat,
         longitude: creatorUser.lon,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01
       }, 1000);
-    } else if (sosNotifications.length > 0) {
+    } else if (firstNotif && firstNotif.lat !== null && firstNotif.lon !== null) {
       mapRef.current.animateToRegion({
-        latitude: sosNotifications[0].lat,
-        longitude: sosNotifications[0].lon,
+        latitude: firstNotif.lat,
+        longitude: firstNotif.lon,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01
       }, 1000);
@@ -440,7 +339,7 @@ export default function App() {
         }, 500);
       } else {
         const creatorUser = roomUsers.find(u => "sos_room_" + u.phone === activeSOSRoom);
-        if (creatorUser) {
+        if (creatorUser && typeof creatorUser.lat === 'number' && typeof creatorUser.lon === 'number') {
           mapRef.current.animateToRegion({
             latitude: creatorUser.lat,
             longitude: creatorUser.lon,
@@ -786,18 +685,44 @@ export default function App() {
     }
   }, [isMicMuted, pttHoldTime]);
 
+  // --- KONUM İZNİ ---
+  // Sistem izin diyaloğu yalnızca izin henüz sorulmadıysa gösterilir. Kullanıcı reddettiyse
+  // tekrar sorulmaz ve "fikrini değiştir" uyarısı gösterilmez (App Store 5.1.1(iv)).
+  const ensureLocationPermission = async (): Promise<boolean> => {
+    try {
+      let { status, canAskAgain } = await Location.getForegroundPermissionsAsync();
+      if (status === 'undetermined' && canAskAgain) {
+        ({ status } = await Location.requestForegroundPermissionsAsync());
+      }
+      const granted = status === 'granted';
+      setLocationGranted(granted);
+      return granted;
+    } catch (e) {
+      console.log("Konum izni kontrol edilemedi:", e);
+      return false;
+    }
+  };
+
+  // Kullanıcı Ayarlar'dan izni değiştirip geri döndüğünde durumu güncelle (diyalog göstermeden)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', async (nextAppState) => {
+      if (nextAppState !== 'active') return;
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        setLocationGranted(status === 'granted');
+        if (status !== 'granted') setHasLocation(false);
+      } catch { }
+    });
+    return () => sub.remove();
+  }, []);
+
   // --- GERÇEK CANLI KONUM TAKİBİ ---
   useEffect(() => {
     let locationSubscription: Location.LocationSubscription | null = null;
 
     const startWatchingLocation = async () => {
-      if (isConnected && socket) {
+      if (isConnected && socket && locationGranted) {
         try {
-          const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') {
-            return;
-          }
-
           locationSubscription = await Location.watchPositionAsync(
             {
               accuracy: Location.Accuracy.High,
@@ -808,6 +733,7 @@ export default function App() {
               const currentLat = location.coords.latitude;
               const currentLon = location.coords.longitude;
 
+              setHasLocation(true);
               setMapRegion(prev => ({
                 ...prev,
                 latitude: currentLat,
@@ -834,7 +760,7 @@ export default function App() {
         locationSubscription.remove();
       }
     };
-  }, [isConnected, socket]);
+  }, [isConnected, socket, locationGranted]);
 
   
   const pickImage = async (useCamera: boolean) => {
@@ -860,7 +786,8 @@ export default function App() {
   const registerUser = async () => {
     if (!name || !plate || !phone || !password || !passwordConfirm || !imageBase64) return Alert.alert('Uyarı', 'Tüm alanları ve fotoğrafı doldurun.');
     if (password !== passwordConfirm) return Alert.alert('Uyarı', 'Şifreler birbiriyle uyuşmuyor.');
-    if (!isKvkkChecked || !isTermsChecked) return Alert.alert('Uyarı', 'Kayıt olmak için Kullanıcı Sözleşmesi ve KVKK metnini onaylamanız gerekmektedir.');
+    const missingRequiredDoc = LEGAL_DOCUMENTS.find(doc => doc.required && !acceptedLegalDocs[doc.id]);
+    if (missingRequiredDoc) return Alert.alert('Uyarı', `Kayıt olmak için "${missingRequiredDoc.title}" metnini onaylamanız gerekmektedir.`);
 
     const nameRegex = /^[a-zA-ZğüşıöçĞÜŞİÖÇ\s]{3,}$/;
     if (!nameRegex.test(name.trim())) {
@@ -890,11 +817,13 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         setAuthStatus('pending');
+        logBreadcrumb('Kayıt talebi gönderildi', 'auth', { phone });
         Alert.alert('Başarılı', 'Kayıt talebiniz alındı. Yöneticiler tarafından onaylandığında giriş yapabileceksiniz.');
       } else {
         Alert.alert('Hata', data.error || 'Kayıt başarısız.');
       }
     } catch (e) {
+      captureError(e, { flow: 'register' });
       Alert.alert('Hata', 'Sunucuya bağlanılamadı.');
     } finally {
       setIsConnecting(false);
@@ -928,6 +857,7 @@ export default function App() {
         await AsyncStorage.removeItem('user_credentials');
         await AsyncStorage.removeItem('user_token');
 
+        logBreadcrumb('Giriş başarılı', 'auth', { phone });
         handleConnect(data.user.name, data.user.plate, phone, data.accessToken || data.token);
       } else if (data.status === 'not_found') {
         Alert.alert('Hata', 'Bu telefon numarasıyla kayıtlı bir hesap bulunamadı.');
@@ -940,6 +870,7 @@ export default function App() {
       }
     } catch (e) {
       console.log("Login hatası:", e);
+      captureError(e, { flow: 'login' });
       Alert.alert('Hata', 'Sunucuya bağlanılamadı veya bir hata oluştu: ' + (e as Error).message);
     } finally {
       setIsConnecting(false);
@@ -983,19 +914,19 @@ export default function App() {
 
     setIsConnecting(true);
 
-    // İzinleri ve konum bilgisini al:
-    let currentLat = 41.0082; // varsayılan fallback
-    let currentLon = 28.9784;
+    // İzinleri ve konum bilgisini al. Konum alınamazsa null kalır; sahte konum sunucuya gönderilmez.
+    let currentLat: number | null = null;
+    let currentLon: number | null = null;
 
     // --- GERÇEK İZİN VE KONUM ALMA KODU ---
     try {
-      // 1. Konum izinlerini iste
-      const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
+      // 1. Konum izni (yalnızca daha önce sorulmadıysa sistem diyaloğu çıkar)
+      const locGranted = await ensureLocationPermission();
 
       // 2. Ses kayıt izinlerini iste
       await Audio.requestPermissionsAsync();
 
-      if (locStatus === 'granted') {
+      if (locGranted) {
         // Web'de hasServicesEnabledAsync desteklenmeyebilir veya sorunlu olabilir, bu yüzden web için true sayıyoruz
         const servicesEnabled = Platform.OS === 'web' ? true : await Location.hasServicesEnabledAsync();
         if (servicesEnabled) {
@@ -1022,30 +953,27 @@ export default function App() {
               }
             }
           } catch (err) {
-            console.log("Konum bilgisine erişilirken hata oluştu, varsayılan konum kullanılacak:", err);
+            console.log("Konum bilgisine erişilirken hata oluştu, konumsuz devam edilecek:", err);
           }
-        } else {
-          Alert.alert(
-            "Konum Servisleri Kapalı",
-            "Cihazınızın GPS/konum servisi kapalı. Uygulama varsayılan konum (İstanbul) ile açılacaktır. Lütfen ayarlardan konumu açın."
-          );
         }
-      } else {
-        Alert.alert(
-          "Konum İzni Reddedildi",
-          "Uygulamanın çalışması için konum izni gereklidir. Varsayılan konum (İstanbul) kullanılacaktır."
-        );
       }
+      // İzin reddedildiyse veya konum servisi kapalıysa uyarı gösterilmez; uygulama konumsuz çalışır.
+      // Konum gerektiren SOS özelliği kullanılmak istendiğinde Ayarlar bağlantısı sunulur (handleSOS).
     } catch (e) {
       console.log("Konum izin veya veri hatası:", e);
     }
     // ---------------------------------------------
 
-    setMapRegion({
-      ...mapRegion,
-      latitude: currentLat,
-      longitude: currentLon
-    });
+    if (currentLat !== null && currentLon !== null) {
+      setHasLocation(true);
+      setMapRegion({
+        ...mapRegion,
+        latitude: currentLat,
+        longitude: currentLon
+      });
+    } else {
+      setHasLocation(false);
+    }
 
     if (socket) {
       socket.disconnect();
@@ -1060,6 +988,7 @@ export default function App() {
       hasConnected = true;
       setIsConnected(true);
       setIsConnecting(false);
+      logBreadcrumb('Socket bağlandı', 'socket', { socketId: newSocket.id });
 
       // Sunucu saat senkronizasyonu için ping at
       newSocket.emit('ping_time', Date.now());
@@ -1089,6 +1018,7 @@ export default function App() {
 
     newSocket.on('disconnect', (reason) => {
       console.log('Socket koptu:', reason);
+      logBreadcrumb('Socket koptu', 'socket', { reason });
       // Eğer sunucu bizi bilerek kopardıysa (token yenileme başarısızsa) logine at
       if (reason === 'io server disconnect') {
         setIsConnected(false);
@@ -1117,10 +1047,13 @@ export default function App() {
           const roomName = sosUser.activeRoom;
           // Eğer bu odanın bildirimi zaten varsa veya kendi odamızsa ekleme
           if (!newNotifs.find(n => n.roomName === roomName) && roomName !== "sos_room_" + connectPhone) {
-            const latDiff = currentLat - sosUser.lat;
-            const lonDiff = currentLon - sosUser.lon;
-            // Basit kuş uçuşu mesafe formülü
-            const distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111;
+            // Basit kuş uçuşu mesafe formülü (iki tarafın da konumu yoksa mesafe bilinmez)
+            let distance: number | null = null;
+            if (currentLat !== null && currentLon !== null && typeof sosUser.lat === 'number' && typeof sosUser.lon === 'number') {
+              const latDiff = currentLat - sosUser.lat;
+              const lonDiff = currentLon - sosUser.lon;
+              distance = Math.sqrt(latDiff * latDiff + lonDiff * lonDiff) * 111;
+            }
 
             newNotifs.push({
               roomName: roomName,
@@ -1147,12 +1080,13 @@ export default function App() {
           lon: data.lon
         }];
       });
-      addLog(`🚨 ACİL DURUM: ${data.from} (${data.distance.toFixed(2)} km)`);
+      const distanceText = typeof data.distance === 'number' ? ` (${data.distance.toFixed(2)} km)` : '';
+      addLog(`🚨 ACİL DURUM: ${data.from}${distanceText}`);
 
       await Notifications.scheduleNotificationAsync({
         content: {
           title: "🚨 ACİL YARDIM ÇAĞRISI!",
-          body: `${data.from} isimli kullanıcıdan bir SOS çağrısı aldınız (${data.distance.toFixed(2)} km)`,
+          body: `${data.from} isimli kullanıcıdan bir SOS çağrısı aldınız${distanceText}`,
           sound: true,
           priority: Notifications.AndroidNotificationPriority.MAX,
           autoDismiss: false,
@@ -1163,6 +1097,7 @@ export default function App() {
 
     newSocket.on('connect_error', (error: any) => {
       console.log("Socket.io Bağlantı Hatası:", error);
+      logBreadcrumb('Socket bağlantı hatası', 'socket', { message: error?.message });
 
       // Eğer ilk defa bağlanmaya çalışıp hata aldıysa, döngüyü durdur ve uyarı ver.
       if (!hasConnected) {
@@ -1181,7 +1116,7 @@ export default function App() {
           try {
             await PCM.start(16000);
             pcmStarted = true;
-          } catch(e) { console.log('PCM Start err:', e); }
+          } catch(e) { console.log('PCM Start err:', e); captureError(e, { flow: 'ptt_pcm_start', trigger: 'channel_locked' }); }
           isPcmStarting = false;
         }
       }
@@ -1194,7 +1129,7 @@ export default function App() {
       if (pcmStopTimer) clearTimeout(pcmStopTimer);
       pcmStopTimer = setTimeout(() => {
         if (pcmStarted) {
-          PCM.stop().catch((e: any) => console.log('PCM Stop err:', e));
+          PCM.stop().catch((e: any) => { console.log('PCM Stop err:', e); captureError(e, { flow: 'ptt_pcm_stop' }); });
           pcmStarted = false;
         }
         if (pcmInterval) { clearInterval(pcmInterval); pcmInterval = null; }
@@ -1229,7 +1164,7 @@ export default function App() {
               const chunk = pcmQueue.shift();
               if (chunk) PCM.enqueueBase64(chunk);
             }
-          } catch(e) { console.log('PCM Start err:', e); }
+          } catch(e) { console.log('PCM Start err:', e); captureError(e, { flow: 'ptt_pcm_start', trigger: 'receive_audio_chunk' }); }
           isPcmStarting = false;
         }
 
@@ -1343,6 +1278,24 @@ export default function App() {
 
   const handleSOS = () => {
     if (!socket) return;
+    // Konum yoksa: SOS'un konumsuz gideceğini bildir, Ayarlar bağlantısı sun; karar kullanıcıda.
+    if (!hasLocation) {
+      Alert.alert(
+        "Konum Paylaşılamıyor",
+        "Konum erişimi kapalı olduğu için SOS çağrınız konum bilgisi olmadan gönderilecek ve diğer şoförler sizi haritada göremeyecek. Konum erişimini Ayarlar'dan açabilirsiniz.",
+        [
+          { text: "Ayarlar", onPress: () => { Linking.openSettings(); } },
+          { text: "Konumsuz Gönder", style: 'destructive', onPress: triggerSOS },
+          { text: "İptal", style: 'cancel' },
+        ]
+      );
+      return;
+    }
+    triggerSOS();
+  };
+
+  const triggerSOS = () => {
+    if (!socket) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     socket.emit('sos_trigger');
     setSosActive(true);
@@ -1350,6 +1303,7 @@ export default function App() {
     setActiveSOSRoom(room);
     setPageMode('room'); // Odaya otomatik geçiş
     addLog("🚨 SOS OLUŞTURULDU!");
+    logBreadcrumb('SOS tetiklendi', 'sos', { room });
   };
 
   const joinSOSRoom = (roomName: string, fromName: string) => {
@@ -1358,12 +1312,14 @@ export default function App() {
     setActiveSOSRoom(roomName);
     setPageMode('room'); // Odaya geç
     addLog(`📞 Odaya Katıldınız: ${fromName}`);
+    logBreadcrumb('SOS odasına katıldı', 'sos', { roomName });
   };
 
   const leaveRoom = () => {
     if (socket && activeSOSRoom) {
       socket.emit('leave_sos_room', activeSOSRoom);
     }
+    logBreadcrumb('SOS odasından ayrıldı', 'sos', { roomName: activeSOSRoom });
     setSosActive(false);
     setActiveSOSRoom(null);
     setPageMode('home');
@@ -1432,18 +1388,20 @@ export default function App() {
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     requestPtt();
-    
+    logBreadcrumb('PTT konuşma isteği gönderildi', 'ptt', { room: activeSOSRoom });
+
     setPttHoldTime(0);
     pttTimerRef.current = setInterval(() => {
       setPttHoldTime(prev => prev + 1);
     }, 1000);
-    
+
     addLog("🎙️ Konuşma isteği gönderildi.");
   };
 
   const handleStopPtt = () => {
     stopPtt();
-    
+    logBreadcrumb('PTT konuşma durduruldu', 'ptt', { room: activeSOSRoom, heldSeconds: pttHoldTime });
+
     if (pttTimerRef.current) {
       clearInterval(pttTimerRef.current);
       pttTimerRef.current = null;
@@ -1456,838 +1414,126 @@ export default function App() {
   // --- RENDERING VIEWS ---
 
   if (!isConnected || testLoading) {
-    if (isCheckingAuth || isConnecting || testLoading) {
-      return (
-        <View style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#ff3b30" />
-          <Text style={{ color: 'white', marginTop: 15, fontSize: 16, fontWeight: 'bold' }}>Yükleniyor...</Text>
-        </View>
-      );
-    }
-
-
-    const takePicture = async () => {
-      if (cameraRef.current) {
-        try {
-          const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5 });
-          if (photo && photo.base64) {
-            setImageBase64(photo.base64);
-            setIsCameraScanning(false);
-            setIsCardDetected(false); // reset
-          }
-        } catch (e) {
-          Alert.alert('Hata', 'Fotoğraf çekilemedi');
-        }
-      }
-    };
-
-    useEffect(() => {
-      if (isCameraScanning && cameraPermission?.granted) {
-        // Fake card detection after 2 seconds
-        const timer = setTimeout(() => {
-          setIsCardDetected(true);
-          setTimeout(() => {
-            takePicture();
-          }, 1500); // takes picture 1.5s after turning green
-        }, 2000);
-        return () => clearTimeout(timer);
-      } else {
-        setIsCardDetected(false);
-      }
-    }, [isCameraScanning, cameraPermission]);
-
-    if (isCameraScanning) {
-      if (!cameraPermission?.granted) {
-        return (
-          <View style={[styles.container, { backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }]}>
-            <Text style={{ color: '#fff', fontSize: 16, marginBottom: 20 }}>Kamera izni gerekiyor</Text>
-            <TouchableOpacity onPress={requestCameraPermission} style={styles.connectButton}><Text style={styles.connectButtonText}>İzin Ver</Text></TouchableOpacity>
-            <TouchableOpacity onPress={() => setIsCameraScanning(false)} style={{ marginTop: 20 }}><Text style={{ color: '#ff3b30', fontSize: 16 }}>İptal</Text></TouchableOpacity>
-          </View>
-        );
-      }
-      return (
-        <View style={{ flex: 1, backgroundColor: 'black' }}>
-          <CameraView style={{ flex: 1 }} facing="back" ref={cameraRef}>
-            <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
-               {/* Kredi kartı/ehliyet çerçevesi */}
-               <View style={{ width: Dimensions.get('window').width * 0.85, height: 220, borderWidth: 4, borderColor: isCardDetected ? '#00ff00' : '#ffffff', borderRadius: 10, backgroundColor: 'transparent' }} />
-               <Text style={{ color: isCardDetected ? '#00ff00' : '#fff', marginTop: 20, fontSize: 16, textAlign: 'center', fontWeight: 'bold' }}>
-                  {isCardDetected ? 'Kart Algılandı! Fotoğraf Çekiliyor...' : 'Lütfen şoför kartınızı çerçevenin içine yerleştirin'}
-               </Text>
-            </View>
-            <View style={{ position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center', flexDirection: 'row', justifyContent: 'space-around' }}>
-              <TouchableOpacity onPress={() => setIsCameraScanning(false)} style={{ padding: 15, backgroundColor: '#333', borderRadius: 10 }}>
-                <Text style={{ color: '#fff', fontSize: 16 }}>İptal</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={takePicture} style={{ padding: 20, backgroundColor: '#ff3b30', borderRadius: 40 }}>
-                <MaterialIcons name="camera" size={30} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          </CameraView>
-        </View>
-      );
-    }
-
     return (
-      <KeyboardAvoidingView
-        style={[styles.container, { backgroundColor: '#000000' }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }} keyboardShouldPersistTaps="handled" style={{ width: '100%' }}>
-          <View style={[styles.loginOverlay, { backgroundColor: '#000000' }]}>
-            <View style={[styles.loginBox, { backgroundColor: 'transparent', elevation: 0, shadowOpacity: 0 }]}>
-              <Animated.Image
-                source={require('../assets/images/logo.png')}
-                style={{
-                  width: 120,
-                  height: 120,
-                  alignSelf: 'center',
-                  marginBottom: 15,
-                  borderRadius: 25,
-                  transform: [
-                    { translateY: splashLogoTranslateY },
-                    { scale: splashLogoScale }
-                  ]
-                }}
-              />
-
-              <Animated.View style={{ opacity: splashFormOpacity, width: '100%', paddingHorizontal: 20 }}>
-                {authStatus === 'pending' && (
-                  <View style={{ alignItems: 'center', marginTop: 20 }}>
-                    <MaterialIcons name="hourglass-empty" size={60} color="#ff3b30" />
-                    <Text style={{ color: '#fff', fontSize: 18, marginTop: 15, textAlign: 'center', fontWeight: 'bold' }}>Kaydınız İnceleniyor</Text>
-                    <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Şoför kartınız yöneticiler tarafından incelendikten sonra uygulamaya giriş yapabileceksiniz.</Text>
-                    <TouchableOpacity style={[styles.connectButton, { marginTop: 30 }]} onPress={handleLoginClick}>
-                      {isConnecting ? <ActivityIndicator color="#fff" /> : <Text style={styles.connectButtonText}>Durumu Kontrol Et</Text>}
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {authStatus === 'rejected' && (
-                  <View style={{ alignItems: 'center', marginTop: 20 }}>
-                    <MaterialIcons name="cancel" size={60} color="#ff3b30" />
-                    <Text style={{ color: '#fff', fontSize: 18, marginTop: 15, textAlign: 'center', fontWeight: 'bold' }}>Kaydınız Reddedildi</Text>
-                    <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Bilgileriniz veya şoför kartınız geçersiz. Lütfen tekrar kayıt olun.</Text>
-                    <TouchableOpacity style={[styles.connectButton, { marginTop: 30 }]} onPress={() => { setAuthStatus('not_found'); setImageBase64(null); }}>
-                      <Text style={styles.connectButtonText}>Tekrar Kayıt Ol</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {authStatus === 'banned' && (
-                  <View style={{ alignItems: 'center', marginTop: 20 }}>
-                    <MaterialIcons name="block" size={60} color="#ff3b30" />
-                    <Text style={{ color: '#fff', fontSize: 18, marginTop: 15, textAlign: 'center', fontWeight: 'bold' }}>Hesabınız Engellendi</Text>
-                    <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Sistem yöneticileri tarafından uygulamaya erişiminiz kalıcı olarak engellenmiştir.</Text>
-                  </View>
-                )}
-                {authStatus === 'approved' && (
-                  <View style={{ alignItems: 'center', marginTop: 20 }}>
-                    <MaterialIcons name="wifi-off" size={60} color="#ff3b30" />
-                    <Text style={{ color: '#fff', fontSize: 18, marginTop: 15, textAlign: 'center', fontWeight: 'bold' }}>Bağlantı Koptu</Text>
-                    <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center' }}>Sunucuya bağlanılamıyor veya internet bağlantınız yok.</Text>
-                    <TouchableOpacity style={[styles.connectButton, { marginTop: 30 }]} onPress={() => handleConnect(name, plate, phone, accessToken)}>
-                      <Text style={styles.connectButtonText}>Yeniden Bağlan</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={{ marginTop: 20 }} onPress={() => setAuthStatus(null)}>
-                      <Text style={{ color: '#ff3b30', fontSize: 16 }}>Farklı Hesaba Geç</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                {(authStatus === null || authStatus === 'not_found') && authMode === 'login' && (
-                  <>
-                    <Text style={styles.authHeading}>Tekrar hoş geldin, devam etmek için giriş yap</Text>
-
-                    <AuthField icon="call" value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" />
-                    <AuthField
-                      icon="lock-outline"
-                      value={password}
-                      onChangeText={setPassword}
-                      placeholder="Şifre"
-                      secureTextEntry={!showPassword}
-                      rightIcon={showPassword ? "visibility-off" : "visibility"}
-                      onRightIconPress={() => setShowPassword(!showPassword)}
-                    />
-
-                    <TouchableOpacity style={[styles.connectButton, isConnecting && { opacity: 0.7 }]} onPress={handleLoginClick} disabled={isConnecting}>
-                      {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Giriş Yap</Text>}
-                    </TouchableOpacity>
-
-                    <View style={styles.authSwitchRow}>
-                      <Text style={styles.authSwitchText}>
-                        Hesabın yok mu?{' '}
-                        <Text style={styles.authSwitchAction} onPress={() => setAuthMode('register')}>Kayıt Ol</Text>
-                      </Text>
-                    </View>
-                  </>
-                )}
-
-                {(authStatus === null || authStatus === 'not_found') && authMode === 'register' && (
-                  <>
-                    <Text style={styles.authHeading}>Aramıza katıl, birkaç bilgiyle şoför hesabını oluştur</Text>
-
-                    <AuthField icon="person-outline" value={name} onChangeText={setName} placeholder="İsim Soyisim" />
-                    <AuthField icon="call" value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" />
-                    <AuthField icon="directions-car" value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34XYZ99)" autoCapitalize="characters" />
-                    <AuthField
-                      icon="lock-outline"
-                      value={password}
-                      onChangeText={setPassword}
-                      placeholder="Şifre Belirleyin"
-                      secureTextEntry={!showPassword}
-                      rightIcon={showPassword ? "visibility-off" : "visibility"}
-                      onRightIconPress={() => setShowPassword(!showPassword)}
-                    />
-                    <AuthField icon="lock-outline" value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Şifreyi Tekrar Girin" secureTextEntry={!showPassword} />
-
-                    <View style={styles.uploadZone}>
-                        <Text style={styles.uploadHintText}>Lütfen Şoför Tanıtım Kartınızı yükleyin.</Text>
-                        {imageBase64 ? (
-                           <View style={styles.uploadPreviewWrap}>
-                             <Image source={{ uri: 'data:image/jpeg;base64,' + imageBase64 }} style={{ width: '100%', height: 150 }} resizeMode="cover" />
-                             <View style={styles.uploadCheckBadge}>
-                               <MaterialIcons name="check" size={14} color="#0a0a0a" />
-                             </View>
-                           </View>
-                        ) : null}
-                        <View style={styles.uploadRow}>
-                           <TouchableOpacity style={styles.uploadBtn} onPress={async () => {
-                              if (!cameraPermission?.granted) await requestCameraPermission();
-                              setIsCameraScanning(true);
-                           }}>
-                              <MaterialIcons name="camera-alt" size={22} color="#fff" />
-                              <Text style={styles.uploadBtnText}>Kamera</Text>
-                           </TouchableOpacity>
-                           <TouchableOpacity style={styles.uploadBtn} onPress={() => pickImage(false)}>
-                              <MaterialIcons name="photo-library" size={22} color="#fff" />
-                              <Text style={styles.uploadBtnText}>Galeri</Text>
-                           </TouchableOpacity>
-                        </View>
-                    </View>
-
-                    {/* Legal Checkboxes */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                       <TouchableOpacity onPress={() => setIsTermsChecked(!isTermsChecked)} style={{ marginRight: 10 }}>
-                          <MaterialIcons name={isTermsChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
-                       </TouchableOpacity>
-                       <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
-                          <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'terms'})}>Kullanıcı Sözleşmesi</Text>'ni okudum ve kabul ediyorum.
-                       </Text>
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-                       <TouchableOpacity onPress={() => setIsKvkkChecked(!isKvkkChecked)} style={{ marginRight: 10 }}>
-                          <MaterialIcons name={isKvkkChecked ? "check-box" : "check-box-outline-blank"} size={24} color="#ff3b30" />
-                       </TouchableOpacity>
-                       <Text style={{ color: '#ccc', flex: 1, fontSize: 13 }}>
-                          <Text style={{ color: '#58a6ff', textDecorationLine: 'underline' }} onPress={() => setShowLegalModal({type: 'kvkk'})}>KVKK Aydınlatma ve Açık Rıza Metni</Text>'ni okudum, anladım ve kabul ediyorum.
-                       </Text>
-                    </View>
-
-                    <TouchableOpacity style={[styles.connectButton, styles.connectButtonRed, isConnecting && { opacity: 0.7 }]} onPress={registerUser} disabled={isConnecting}>
-                      {isConnecting ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.connectButtonText}>Kayıt Ol</Text>}
-                    </TouchableOpacity>
-
-                    <View style={styles.authSwitchRow}>
-                      <Text style={styles.authSwitchText}>
-                        Zaten hesabın var mı?{' '}
-                        <Text style={styles.authSwitchAction} onPress={() => setAuthMode('login')}>Giriş Yap</Text>
-                      </Text>
-                    </View>
-                  </>
-                )}
-              </Animated.View>
-            </View>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+      <AuthScreen
+        isCheckingAuth={isCheckingAuth}
+        isConnecting={isConnecting}
+        testLoading={testLoading}
+        cameraRef={cameraRef}
+        isCameraScanning={isCameraScanning}
+        setIsCameraScanning={setIsCameraScanning}
+        cameraPermission={cameraPermission}
+        requestCameraPermission={requestCameraPermission}
+        isCardDetected={isCardDetected}
+        setIsCardDetected={setIsCardDetected}
+        setImageBase64={setImageBase64}
+        splashLogoTranslateY={splashLogoTranslateY}
+        splashLogoScale={splashLogoScale}
+        splashFormOpacity={splashFormOpacity}
+        authStatus={authStatus}
+        setAuthStatus={setAuthStatus}
+        handleLoginClick={handleLoginClick}
+        name={name}
+        plate={plate}
+        phone={phone}
+        accessToken={accessToken}
+        handleConnect={handleConnect}
+        authMode={authMode}
+        setAuthMode={setAuthMode}
+        password={password}
+        setPassword={setPassword}
+        showPassword={showPassword}
+        setShowPassword={setShowPassword}
+        passwordConfirm={passwordConfirm}
+        setPasswordConfirm={setPasswordConfirm}
+        setPhone={setPhone}
+        setName={setName}
+        setPlate={setPlate}
+        imageBase64={imageBase64}
+        pickImage={pickImage}
+        acceptedLegalDocs={acceptedLegalDocs}
+        setAcceptedLegalDocs={setAcceptedLegalDocs}
+        viewingLegalDoc={viewingLegalDoc}
+        setViewingLegalDoc={setViewingLegalDoc}
+        registerUser={registerUser}
+      />
     );
   }
 
   if (pageMode === 'room') {
     // Görünüm 2: SOS Odası (Telsiz ve Oda Haritası)
     return (
-      <View style={styles.roomContainer}>
-        <View style={styles.roomHeader}>
-          <TouchableOpacity style={styles.iconButton} onPress={() => setPageMode('home')}>
-            <MaterialIcons name="arrow-back" size={18} color="#fff" />
-          </TouchableOpacity>
-          <View style={styles.roomTitleWrap}>
-            <Animated.View style={[styles.liveDot, { opacity: liveDotAnim }]} />
-            <Text style={styles.roomTitle} numberOfLines={1}>ACİL DURUM ODASI</Text>
-          </View>
-          {socket && activeSOSRoom === "sos_room_" + phone ? (
-            <TouchableOpacity style={styles.endButton} onPress={() => {
-              Alert.alert(
-                "Emin misiniz?",
-                "SOS çağrısını bitirmek istediğinize emin misiniz? Bu işlem odayı herkes için kapatacaktır.",
-                [
-                  { text: "İptal", style: "cancel" },
-                  { text: "Evet, Bitir", style: "destructive", onPress: () => socket.emit('end_sos', activeSOSRoom) }
-                ]
-              );
-            }}>
-              <MaterialIcons name="stop" size={14} color="#fff" />
-              <Text style={styles.endButtonText}>SOS BİTİR</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity style={styles.endButton} onPress={leaveRoom}>
-              <MaterialIcons name="logout" size={14} color="#fff" />
-              <Text style={styles.endButtonText}>Çıkış Yap</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={styles.roomMapBox}>
-          <MapView
-            ref={mapRef}
-            userInterfaceStyle="dark"
-            key={`map-room-${activeSOSRoom}`}
-            style={styles.map}
-            onPanDrag={() => setFollowMode('none')}
-            initialRegion={{
-              latitude: sosNotifications.length > 0 ? sosNotifications[0].lat : mapRegion.latitude,
-              longitude: sosNotifications.length > 0 ? sosNotifications[0].lon : mapRegion.longitude,
-              latitudeDelta: 0.02,
-              longitudeDelta: 0.02,
-            }}
-          >
-            {socket && activeSOSRoom === "sos_room_" + phone ? (
-              <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz (SOS)">
-                <View style={styles.sosMarkerContainer}>
-                  <View style={styles.sosMarkerRing} />
-                  <View style={styles.sosBadge}>
-                    <Text style={styles.sosBadgeText}>SOS</Text>
-                  </View>
-                  <Text style={styles.carIcon}>🚗</Text>
-                </View>
-              </Marker>
-            ) : (
-              <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} title="Siz">
-                <View style={styles.taxiMarker}>
-                  <Text style={{ fontSize: 26 }}>🚕</Text>
-                </View>
-              </Marker>
-            )}
-            {roomUsers.map(u => {
-              if (socket && u.id === socket.id) return null;
-
-              if (activeSOSRoom && u.activeRoom !== activeSOSRoom) return null;
-
-              const isCreator = activeSOSRoom === "sos_room_" + u.phone;
-
-              if (isCreator) {
-                return (
-                  <Marker
-                    key={u.id}
-                    coordinate={{ latitude: u.lat, longitude: u.lon }}
-                    title={u.name + " (SOS)"}
-                  >
-                    <View style={styles.sosMarkerContainer}>
-                      <View style={styles.sosMarkerRing} />
-                      <View style={styles.sosBadge}>
-                        <Text style={styles.sosBadgeText}>SOS</Text>
-                      </View>
-                      <Text style={styles.carIcon}>🚗</Text>
-                    </View>
-                  </Marker>
-                );
-              }
-
-              return (
-                <Marker
-                  key={u.id}
-                  coordinate={{ latitude: u.lat, longitude: u.lon }}
-                  title={u.name}
-                >
-                  <View style={styles.taxiMarker}>
-                    <Text style={{ fontSize: 26 }}>🚕</Text>
-                  </View>
-                </Marker>
-              );
-            })}
-          </MapView>
-
-          <View style={styles.occupancyChip}>
-            <View style={styles.occupancyDot} />
-            <Text style={styles.occupancyChipText}>{roomUsers.length} kişi çevrimiçi</Text>
-          </View>
-
-          <View style={styles.mapControls}>
-            <TouchableOpacity style={styles.mapControlBtn} onPress={focusOnSOS}>
-              <MaterialIcons name="location-on" size={18} color="white" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.mapControlBtn} onPress={focusOnMe}>
-              <MaterialIcons name="my-location" size={18} color="white" />
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity style={styles.chatFab} onPress={() => setShowChat(true)}>
-            <MaterialIcons name="chat-bubble" size={14} color="white" />
-            <Text style={styles.chatFabText}>Sohbet</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.pttBox}>
-          {activeSOSRoom ? (
-            <>
-              <View style={styles.pttDragHandle} />
-
-              {(!isMicMuted || pttHoldTime > 0) && (
-                <View style={styles.pttStatusRow}>
-                  <View style={[styles.pttStatusDot, { backgroundColor: '#4CAF50' }]} />
-                  <Text style={styles.pttStatusTextNew}>Ses yayını aktif</Text>
-                  <Text style={styles.pttTimerText}>{formatDuration(pttHoldTime * 1000)}</Text>
-                </View>
-              )}
-
-              {isChannelLocked && !!lockedBy ? (
-                <View style={styles.lockChip}>
-                  <MaterialIcons name="lock" size={14} color="#ff3b30" />
-                  <Text style={styles.lockChipText}>{lockedBy} konuşuyor…</Text>
-                </View>
-              ) : null}
-
-              <View style={styles.pttButtonContainer}>
-                {(!isMicMuted || pttHoldTime > 0) ? (
-                  <View style={styles.eqRow}>
-                    {eqAnims.map((anim, i) => (
-                      <Animated.View key={`eq-l-${i}`} style={[styles.eqBar, { height: [14, 26, 18, 30][i], transform: [{ scaleY: anim }] }]} />
-                    ))}
-                  </View>
-                ) : <View style={styles.eqRow} />}
-
-                <TouchableOpacity
-                  style={[styles.pttButton, (!isMicMuted || pttHoldTime > 0) ? styles.pttButtonRecording : styles.pttButtonInactive, isChannelLocked && styles.pttButtonLocked]}
-                  onPressIn={handleStartPtt}
-                  onPressOut={handleStopPtt}
-                  activeOpacity={0.8}
-                >
-                  <Animated.View style={{ transform: [{ scale: (!isMicMuted || pttHoldTime > 0) ? micPulseAnim : 1 }] }}>
-                    <MaterialIcons name="mic" size={56} color={isChannelLocked ? 'rgba(255,255,255,0.35)' : 'white'} />
-                  </Animated.View>
-                </TouchableOpacity>
-
-                {(!isMicMuted || pttHoldTime > 0) ? (
-                  <View style={styles.eqRow}>
-                    {eqAnims.map((anim, i) => (
-                      <Animated.View key={`eq-r-${i}`} style={[styles.eqBar, { height: [14, 26, 18, 30][i], transform: [{ scaleY: anim }] }]} />
-                    ))}
-                  </View>
-                ) : <View style={styles.eqRow} />}
-              </View>
-            </>
-          ) : null}
-        </View>
-
-        {/* SOHBET MODALI */}
-        <Modal visible={showChat} animationType="slide" transparent={true} onRequestClose={() => setShowChat(false)}>
-          <View style={styles.chatModalContainer}>
-            <TouchableOpacity style={{ flex: 1, width: '100%' }} activeOpacity={1} onPress={() => setShowChat(false)} />
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
-              <View style={[styles.chatBox, { height: height * 0.7, width: '100%' }]}>
-                <View style={styles.chatDragHandle} />
-                <View style={styles.chatHeader}>
-                  <Text style={styles.chatHeaderTitle}>Acil Durum Sohbeti</Text>
-                  <TouchableOpacity onPress={() => setShowChat(false)}>
-                    <Text style={styles.chatCloseText}>Kapat</Text>
-                  </TouchableOpacity>
-                </View>
-                <FlatList
-                  ref={chatListRef}
-                  onContentSizeChange={() => chatListRef.current?.scrollToEnd({ animated: true })}
-                  onLayout={() => chatListRef.current?.scrollToEnd({ animated: true })}
-                  data={chatMessages}
-                  keyExtractor={item => item.id}
-                  contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
-                  renderItem={({ item }) => {
-                    const isMe = socket && item.senderId === socket.id;
-                    const timestampStr = new Date(item.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
-                    
-                    return (
-                      <View style={[styles.chatRow, isMe ? styles.chatRowMe : styles.chatRowOther]}>
-                        {!isMe && (
-                          <View style={styles.chatAvatarOther}>
-                            <MaterialIcons name="local-taxi" size={18} color="#fbc02d" />
-                          </View>
-                        )}
-                        <View style={{ maxWidth: '75%' }}>
-                          <View style={[styles.chatBubble, isMe ? styles.chatBubbleMe : styles.chatBubbleOther]}>
-                            {!isMe && <Text style={styles.chatSenderName}>{item.senderName}</Text>}
-                            {item.type === 'text' ? (
-                              <Text style={styles.chatContent}>{item.content}</Text>
-                            ) : (
-                              <View style={styles.audioMessageContainer}>
-                                <View style={styles.audioMessageRow}>
-                                  <View style={styles.waveformBox}>
-                                    {renderWaveform(item.id, playbackProgress[item.id] || 0)}
-                                  </View>
-                                  <TouchableOpacity style={[styles.chatPlayIconBtn, { marginLeft: 10, marginRight: 0 }]} onPress={() => handlePlayPause(item.id)}>
-                                    <Text style={{ fontSize: 24 }}>{playingAudioId === item.id ? '⏹️' : '▶️'}</Text>
-                                  </TouchableOpacity>
-                                </View>
-                                <Text style={styles.audioDurationText}>{formatDuration(item.duration)}</Text>
-                              </View>
-                            )}
-                          </View>
-                          <View style={[styles.chatMetaRow, isMe ? { justifyContent: 'flex-end' } : { justifyContent: 'flex-start' }]}>
-                            <Text style={styles.chatTime}>{timestampStr}</Text>
-                            {isMe && <MaterialIcons name="done-all" size={14} color="#ff3b30" style={{ marginLeft: 4 }} />}
-                          </View>
-                        </View>
-                        {isMe && (
-                          <View style={styles.chatAvatarMe}>
-                            <MaterialIcons name="person" size={20} color="#ccc" />
-                          </View>
-                        )}
-                      </View>
-                    );
-                  }}
-                />
-                
-                <View style={styles.onlineUsersRow}>
-                  <View style={styles.onlineDot} />
-                  <Text style={styles.onlineUsersText}>{roomUsers.length} kişi çevrimiçi</Text>
-                </View>
-
-                <View style={styles.chatInputContainer}>
-                  <TouchableOpacity style={styles.chatAttachmentButton}>
-                    <MaterialIcons name="attach-file" size={24} color="#aaa" />
-                  </TouchableOpacity>
-                  <TextInput
-                    style={styles.chatInput}
-                    placeholder="Mesaj yaz..."
-                    placeholderTextColor="#777"
-                    value={inputText}
-                    onChangeText={setInputText}
-                  />
-                  <TouchableOpacity style={styles.chatSendButton} onPress={sendTextMessage}>
-                    <Text style={styles.chatSendText}>Gönder</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </KeyboardAvoidingView>
-          </View>
-        </Modal>
-      </View>
+      <RoomScreen
+        hasLocation={hasLocation}
+        setPageMode={setPageMode}
+        liveDotAnim={liveDotAnim}
+        socket={socket}
+        activeSOSRoom={activeSOSRoom}
+        phone={phone}
+        leaveRoom={leaveRoom}
+        mapRef={mapRef}
+        setFollowMode={setFollowMode}
+        sosNotifications={sosNotifications}
+        mapRegion={mapRegion}
+        roomUsers={roomUsers}
+        focusOnSOS={focusOnSOS}
+        focusOnMe={focusOnMe}
+        setShowChat={setShowChat}
+        isMicMuted={isMicMuted}
+        pttHoldTime={pttHoldTime}
+        isChannelLocked={isChannelLocked}
+        lockedBy={lockedBy}
+        formatDuration={formatDuration}
+        eqAnims={eqAnims}
+        handleStartPtt={handleStartPtt}
+        handleStopPtt={handleStopPtt}
+        micPulseAnim={micPulseAnim}
+        showChat={showChat}
+        height={height}
+        chatListRef={chatListRef}
+        chatMessages={chatMessages}
+        renderWaveform={renderWaveform}
+        playbackProgress={playbackProgress}
+        handlePlayPause={handlePlayPause}
+        playingAudioId={playingAudioId}
+        inputText={inputText}
+        setInputText={setInputText}
+        sendTextMessage={sendTextMessage}
+      />
     );
   }
 
   // Görünüm 1: Ana Ekran (Home)
   return (
-    <View style={styles.container}>
-
-      {/* Üst Bar: Profil Bilgisi + Çıkış */}
-      <View style={styles.topBar}>
-        <View style={styles.profileCard}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarText}>{(name || '?').trim().charAt(0).toUpperCase()}</Text>
-          </View>
-          <View style={{ flexShrink: 1 }}>
-            <Text style={styles.profileName} numberOfLines={1}>{name || 'Sürücü'}</Text>
-            {plate ? (
-              <View style={styles.plateBadge}>
-                <MaterialIcons name="directions-car" size={11} color="#0a0a0a" />
-                <Text style={styles.plateBadgeText}>{plate}</Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={styles.iconButton}
-          onPress={async () => {
-            try {
-              // 1. Sunucu tarafında token versiyonunu artırarak çıkış yap (Token Invalidation)
-              fetch(`${serverIp}/api/logout`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone })
-              }).catch(() => {});
-
-              if (socket) socket.disconnect();
-              setIsConnected(false);
-
-              // 2. Güvenli depodaki refresh token'ı sil
-              await SecureStore.deleteItemAsync('refreshToken');
-
-              // 3. Kalıntıları sil ve state'i sıfırla
-              await AsyncStorage.removeItem('activeSOSRoom');
-              setName("");
-              setPlate("");
-              setPhone("");
-              setAccessToken(null);
-              setAuthStatus(null);
-              setPassword("");
-              setPasswordConfirm("");
-              setIsAutoLoginTriggered(false);
-              setAuthStatus(null);
-              setAuthMode('login');
-            } catch (e) { }
-          }}
-        >
-          <MaterialIcons name="logout" size={20} color="#fff" />
-        </TouchableOpacity>
-      </View>
-      {/* Üstteki SOS Alert Banner */}
-      {sosNotifications.map((notification, index) => (
-        <View key={notification.roomName} style={[styles.topBanner, { top: 130 + (index * 92) }]}>
-          <View style={styles.bannerIconWrap}>
-            <MaterialIcons name="campaign" size={20} color="#ff3b30" />
-          </View>
-          <View style={styles.bannerInfo}>
-            <Text style={styles.bannerTitle}>ACİL YARDIM ÇAĞRISI</Text>
-            <Text style={styles.bannerSubtitle}>{notification.from} · {notification.distance.toFixed(2)} km</Text>
-          </View>
-          <TouchableOpacity style={styles.joinButton} onPress={() => joinSOSRoom(notification.roomName, notification.from)}>
-            <Text style={styles.joinButtonText}>Katıl</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
-
-      {/* Ana Ekran Ortalanmış Harita (Gizlendi) - Tamamen Silindi */}
-
-      {/* Ortalanmış SOS Butonu */}
-      <View style={styles.homeSosContainer}>
-        <View style={styles.sosButtonBox}>
-          {!sosActive && (
-            <>
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.radarRing,
-                  {
-                    opacity: radarAnim1.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
-                    transform: [{ scale: radarAnim1.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }) }],
-                  },
-                ]}
-              />
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.radarRing,
-                  {
-                    opacity: radarAnim2.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
-                    transform: [{ scale: radarAnim2.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }) }],
-                  },
-                ]}
-              />
-            </>
-          )}
-          {!sosActive ? (
-            <TouchableOpacity onPress={handleSOS} activeOpacity={0.85} style={styles.sosTouchable}>
-              <Animated.View style={styles.sosButton}>
-                <MaterialIcons name="warning" size={26} color="#fff" />
-                <Text style={styles.sosText}>SOS</Text>
-              </Animated.View>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity onPress={() => setPageMode('room')} activeOpacity={0.85} style={styles.sosTouchable}>
-              <Animated.View style={[styles.sosButton, { backgroundColor: '#ff9800', shadowColor: '#ff9800', transform: [{ scale: pulseAnim }] }]}>
-                <MaterialIcons name="campaign" size={24} color="#fff" />
-                <Text style={[styles.sosText, { fontSize: 20, textAlign: 'center' }]}>SOS'e Dön</Text>
-              </Animated.View>
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-
-      {/* Sol Alt Profil Düzenle Butonu */}
-      <View style={styles.bottomBar}>
-        <TouchableOpacity style={styles.editProfileBtn} onPress={() => setShowProfileModal(true)} activeOpacity={0.85}>
-          <MaterialIcons name="edit" size={16} color="#fff" />
-          <Text style={styles.editProfileText}>Profili Düzenle</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Profil Düzenleme Modalı */}
-      <Modal visible={showProfileModal} animationType="slide" transparent={true} onRequestClose={() => setShowProfileModal(false)}>
-        <KeyboardAvoidingView style={styles.profileSheetOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <TouchableOpacity style={{ flex: 1, width: '100%' }} activeOpacity={1} onPress={() => setShowProfileModal(false)} />
-          <View style={styles.profileSheet}>
-            <View style={styles.chatDragHandle} />
-            <View style={[styles.avatarCircle, styles.profileSheetAvatar]}>
-              <Text style={[styles.avatarText, { fontSize: 22 }]}>{(name || '?').trim().charAt(0).toUpperCase()}</Text>
-            </View>
-
-            <AuthField icon="person-outline" value={name} onChangeText={setName} placeholder="İsim Soyisim" />
-            <AuthField icon="call" value={phone} onChangeText={setPhone} placeholder="Telefon Numarası" keyboardType="phone-pad" />
-            <AuthField icon="directions-car" value={plate} onChangeText={setPlate} placeholder="Plaka (örn: 34 T 1234)" autoCapitalize="characters" />
-
-            <View style={styles.sheetActionsRow}>
-              <TouchableOpacity style={styles.ghostButton} onPress={() => setShowProfileModal(false)}>
-                <Text style={styles.ghostButtonText}>İptal</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.connectButton, { flex: 1, marginTop: 0 }]} onPress={handleUpdateProfile}>
-                <Text style={styles.connectButtonText}>Güncelle</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* Onboarding Modal */}
-      <Modal visible={showOnboarding} animationType="slide" transparent={false}>
-        <View style={{ flex: 1, backgroundColor: '#000' }}>
-          <Video
-            source={{ uri: 'https://www.w3schools.com/html/mov_bbb.mp4' }}
-            style={{ flex: 1 }}
-            resizeMode={ResizeMode.COVER}
-            shouldPlay
-            useNativeControls={false}
-            onPlaybackStatusUpdate={status => {
-              if (status.isLoaded && status.didJustFinish) {
-                handleFinishOnboarding();
-              }
-            }}
-          />
-          <TouchableOpacity 
-            style={{ position: 'absolute', top: 50, right: 20, backgroundColor: 'rgba(0,0,0,0.5)', padding: 15, borderRadius: 8, zIndex: 100 }}
-            onPress={handleFinishOnboarding}
-          >
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>Geç (Skip)</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
-
-    </View>
+    <HomeScreen
+      name={name}
+      plate={plate}
+      phone={phone}
+      serverIp={serverIp}
+      socket={socket}
+      setIsConnected={setIsConnected}
+      setName={setName}
+      setPlate={setPlate}
+      setPhone={setPhone}
+      setAccessToken={setAccessToken}
+      setAuthStatus={setAuthStatus}
+      setPassword={setPassword}
+      setPasswordConfirm={setPasswordConfirm}
+      setIsAutoLoginTriggered={setIsAutoLoginTriggered}
+      setAuthMode={setAuthMode}
+      sosNotifications={sosNotifications}
+      joinSOSRoom={joinSOSRoom}
+      sosActive={sosActive}
+      radarAnim1={radarAnim1}
+      radarAnim2={radarAnim2}
+      handleSOS={handleSOS}
+      setPageMode={setPageMode}
+      pulseAnim={pulseAnim}
+      showProfileModal={showProfileModal}
+      setShowProfileModal={setShowProfileModal}
+      handleUpdateProfile={handleUpdateProfile}
+      showOnboarding={showOnboarding}
+      handleFinishOnboarding={handleFinishOnboarding}
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111', alignItems: 'center' },
-  map: { width: '100%', height: '100%' },
-
-  // Login Ekranı
-  loginOverlay: { flex: 1, width: '100%', backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center' },
-  loginBox: { width: '85%', backgroundColor: 'rgba(30,30,30,1)', padding: 25, borderRadius: 15, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.5, shadowRadius: 10 },
-  input: { backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', color: 'white', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 14, marginBottom: 12, fontSize: 15 },
-  connectButton: { backgroundColor: '#4CAF50', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 10, shadowColor: '#4CAF50', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 14, elevation: 6 },
-  connectButtonRed: { backgroundColor: '#ff3b30', shadowColor: '#ff3b30' },
-  connectButtonText: { color: 'white', fontSize: 18, fontWeight: 'bold' },
-
-  // Giriş / Kayıt / Profil ortak alan bileşenleri
-  authFieldWrap: { position: 'relative', width: '100%' },
-  authFieldIconLeft: { position: 'absolute', left: 14, top: 16, zIndex: 1 },
-  authFieldIconRight: { position: 'absolute', right: 14, top: 14 },
-  authHeading: { color: '#9c9aa4', fontSize: 12.5, textAlign: 'center', marginBottom: 18 },
-  authSwitchRow: { marginTop: 18, alignItems: 'center' },
-  authSwitchText: { color: '#9c9aa4', fontSize: 13 },
-  authSwitchAction: { color: '#ff3b30', fontWeight: '800' },
-
-  uploadZone: { borderWidth: 1.5, borderStyle: 'dashed', borderColor: 'rgba(255,255,255,0.22)', borderRadius: 16, padding: 12, marginTop: 6, marginBottom: 16 },
-  uploadHintText: { color: '#ff3b30', fontSize: 12, fontWeight: '700', textAlign: 'center', marginBottom: 10 },
-  uploadPreviewWrap: { position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 10 },
-  uploadCheckBadge: { position: 'absolute', top: 6, right: 6, width: 20, height: 20, borderRadius: 10, backgroundColor: '#4CAF50', justifyContent: 'center', alignItems: 'center' },
-  uploadRow: { flexDirection: 'row', gap: 8 },
-  uploadBtn: { flex: 1, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', padding: 12, borderRadius: 12, alignItems: 'center' },
-  uploadBtnText: { color: '#fff', fontSize: 11, fontWeight: '700', marginTop: 6 },
-
-  profileSheetOverlay: { flex: 1, width: '100%', backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  profileSheet: { backgroundColor: '#1e1e1e', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 10, paddingBottom: 30, alignItems: 'center' },
-  profileSheetAvatar: { width: 56, height: 56, borderRadius: 28, marginRight: 0, marginBottom: 16, alignSelf: 'center' },
-  sheetActionsRow: { flexDirection: 'row', gap: 10, width: '100%', marginTop: 6 },
-  ghostButton: { flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', borderRadius: 14, paddingVertical: 15 },
-  ghostButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-
-  // Ana Ekran (Home) Görünümü
-  topBar: { position: 'absolute', top: 60, left: 20, right: 20, zIndex: 100, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
-  profileCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 16, maxWidth: '78%' },
-  avatarCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#4CAF50', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  avatarText: { color: '#0a0a0a', fontWeight: '800', fontSize: 15 },
-  profileName: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  plateBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4CAF50', alignSelf: 'flex-start', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginTop: 4 },
-  plateBadgeText: { color: '#0a0a0a', fontSize: 10, fontWeight: '800', marginLeft: 3 },
-  iconButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', alignItems: 'center' },
-
-  topBanner: { position: 'absolute', top: 50, width: '90%', backgroundColor: '#1a1a1a', borderRadius: 16, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 10, borderWidth: 1, borderColor: '#ff3b30', shadowColor: '#ff3b30', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 8 },
-  bannerIconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,59,48,0.15)', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  bannerInfo: { flex: 1 },
-  bannerTitle: { color: '#ff3b30', fontWeight: '900', fontSize: 14, letterSpacing: 0.3 },
-  bannerSubtitle: { color: 'rgba(255,255,255,0.75)', fontSize: 13, marginTop: 2 },
-  joinButton: { backgroundColor: '#ff3b30', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 },
-  joinButtonText: { color: 'white', fontWeight: '800', fontSize: 13 },
-
-  homeSosContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' },
-  sosButtonBox: { width: 150, height: 150, justifyContent: 'center', alignItems: 'center' },
-  sosTouchable: { width: 150, height: 150, justifyContent: 'center', alignItems: 'center' },
-  radarRing: { position: 'absolute', width: 150, height: 150, borderRadius: 75, borderWidth: 2, borderColor: '#ff3b30' },
-  sosButton: { width: 150, height: 150, borderRadius: 75, backgroundColor: '#ff3b30', justifyContent: 'center', alignItems: 'center', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20, elevation: 10 },
-  sosText: { color: 'white', fontSize: 32, fontWeight: '900', marginTop: 2 },
-
-  bottomBar: { position: 'absolute', bottom: 40, left: 20, zIndex: 100 },
-  editProfileBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 16, paddingVertical: 11, borderRadius: 22 },
-  editProfileText: { color: '#fff', fontWeight: '700', fontSize: 13, marginLeft: 6 },
-
-  // Oda (Room) Görünümü
-  roomContainer: { flex: 1, backgroundColor: '#111' },
-  roomHeader: { height: 100, paddingTop: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 15, backgroundColor: '#111', gap: 10 },
-  roomTitleWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  liveDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#ff3b30' },
-  roomTitle: { color: 'white', fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
-  endButton: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#ff3b30', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 9 },
-  endButtonText: { color: '#fff', fontWeight: '800', fontSize: 11 },
-
-  roomMapBox: { flex: 1, backgroundColor: '#333' },
-  occupancyChip: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(12,12,15,0.74)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
-  occupancyDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#4CAF50' },
-  occupancyChipText: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  mapControls: { position: 'absolute', top: 12, right: 12, gap: 8 },
-  mapControlBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(12,12,15,0.74)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', justifyContent: 'center', alignItems: 'center' },
-  chatFab: { position: 'absolute', bottom: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(12,12,15,0.8)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18 },
-  chatFabText: { color: '#fff', fontWeight: '700', fontSize: 12 },
-
-  pttBox: { backgroundColor: '#161616', borderTopLeftRadius: 30, borderTopRightRadius: 30, alignItems: 'center', padding: 20, paddingTop: 12, paddingBottom: 40, minHeight: 280 },
-  pttDragHandle: { width: 36, height: 4, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.18)', marginBottom: 16 },
-  pttStatusRow: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'center', marginBottom: 10 },
-  pttStatusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
-  pttStatusTextNew: { color: 'white', fontSize: 16, fontWeight: 'bold', marginRight: 20 },
-  pttTimerText: { color: '#ccc', fontSize: 16, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
-  pttButtonContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: '100%' },
-  pttButton: { width: 130, height: 130, borderRadius: 65, justifyContent: 'center', alignItems: 'center' },
-  pttButtonInactive: { backgroundColor: '#333', borderWidth: 2, borderColor: '#444' },
-  pttButtonRecording: { backgroundColor: '#ff3b30', shadowColor: '#ff3b30', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20, elevation: 15 },
-  pttButtonLocked: { backgroundColor: '#2a0d0d', borderColor: '#4d1414' },
-  lockChip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#1a1a1a', borderWidth: 1, borderColor: '#ff3b30', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 30 },
-  lockChipText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  eqRow: { width: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
-  eqBar: { width: 4, backgroundColor: '#ff3b30', borderRadius: 2 },
-
-  sosMarkerContainer: { alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  sosMarkerRing: { position: 'absolute', width: 54, height: 54, borderRadius: 27, backgroundColor: 'rgba(255,59,48,0.25)' },
-  sosBadge: { backgroundColor: '#ff3b30', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10, borderWidth: 2, borderColor: 'white', zIndex: 2, elevation: 5, marginBottom: -5 },
-  sosBadgeText: { color: 'white', fontSize: 10, fontWeight: 'bold' },
-  carIcon: { fontSize: 36 },
-  taxiMarker: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-
-  chatModalContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.85)' },
-  chatBox: { backgroundColor: '#1a1a1a', height: '70%', borderTopLeftRadius: 25, borderTopRightRadius: 25, display: 'flex' },
-  chatDragHandle: { width: 40, height: 5, backgroundColor: '#555', borderRadius: 3, alignSelf: 'center', marginTop: 15, marginBottom: 5 },
-  chatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingBottom: 15, borderBottomWidth: 1, borderColor: '#333' },
-  chatHeaderTitle: { fontSize: 18, fontWeight: 'bold', color: 'white' },
-  chatCloseText: { color: '#ff3b30', fontSize: 16 },
-  chatRow: { flexDirection: 'row', marginBottom: 15, alignItems: 'flex-start' },
-  chatRowMe: { justifyContent: 'flex-end' },
-  chatRowOther: { justifyContent: 'flex-start' },
-  chatAvatarOther: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  chatAvatarMe: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#333', justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
-  chatBubble: { padding: 12, borderRadius: 15 },
-  chatBubbleMe: { backgroundColor: '#d32f2f', borderTopRightRadius: 4 },
-  chatBubbleOther: { backgroundColor: '#2a2a2a', borderTopLeftRadius: 4 },
-  chatSenderName: { fontSize: 13, color: '#ff5252', marginBottom: 4, fontWeight: 'bold' },
-  chatContent: { color: '#fff', fontSize: 15 },
-  chatMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
-  chatTime: { fontSize: 11, color: '#888' },
-  chatPlayIconBtn: { marginRight: 10, justifyContent: 'center', alignItems: 'center' },
-  audioMessageContainer: { minWidth: 150, paddingVertical: 5 },
-  audioMessageRow: { flexDirection: 'row', alignItems: 'center' },
-  waveformBox: { flex: 1 },
-  audioDurationText: { color: '#aaa', fontSize: 11, fontWeight: 'bold', marginTop: 5, alignSelf: 'flex-start' },
-  onlineUsersRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
-  onlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#4CAF50', marginRight: 8 },
-  onlineUsersText: { color: '#888', fontSize: 12 },
-  chatInputContainer: { flexDirection: 'row', alignItems: 'center', padding: 15, paddingBottom: 30, backgroundColor: '#1a1a1a', borderTopWidth: 1, borderColor: '#333' },
-  chatAttachmentButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#2a2a2a', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  chatInput: { flex: 1, backgroundColor: '#2a2a2a', borderRadius: 22, paddingHorizontal: 15, paddingVertical: 12, color: 'white', fontSize: 15 },
-  chatSendButton: { backgroundColor: '#007aff', height: 44, paddingHorizontal: 20, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
-  chatSendText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
-
-});
